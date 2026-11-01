@@ -42,8 +42,35 @@ linx crosstest > agents.json      # then: sebastian crosstest --manifest agents.
 linx relay events.json --ledger unisync.jsonl   # mirror a Vortex event feed onto UniSync
 linx status                       # one view: checkouts + UniSync (Supabase if configured)
 linx selftest                     # read-only PASS/FAIL check of the whole chain on this machine
+linx memory check                 # shared memory: conflicts, stale facts, duplicates, links
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
+
+### Active memory
+
+One shared memory for every system, on the UniSync ledger (the record of truth): every fact is a
+`memory.write` by a registered agent, so each value has an author, a ledger position and a hash chain.
+
+```bash
+linx memory put build_cmd "python -m pytest" --as sebastian      # JSON if it parses, else text
+linx memory get build_cmd                                        # '#8 sebastian: "python -m pytest"'
+linx memory history vortex/task/t-aaa                            # every write, oldest first
+linx memory check                                                # read-only report
+linx memory consolidate --as coordinator-bot --every 300         # keep it active
+linx memory cards --out ./staging/memory                         # Obsidian cards for HORIZONTAL-VAULT
+```
+
+`check` finds **conflicts** (two or more agents disagree on a key within its last 5 writes),
+**stale** facts (last write 500+ entries behind the head; `--stale-after`), **duplicates** (keys in one
+scope holding the same value) and **links** (a value naming another key as `scope/key`, or a bare key
+in the same scope; a heuristic, so short common key names can link loosely).
+
+`consolidate` makes it active: the agent you name posts the report as `linx/memory/consolidation`
+and escalates each conflict once. Re-running with nothing new posts nothing. `cards` writes one card
+per fact plus `000_UniSync_Memory_MOC.md`, in HORIZONTAL-VAULT's frontmatter format, with `[[links]]`
+and conflict/stale tags. It refuses a folder that looks like a live vault; HORIZONTAL imports them.
+
+Stage 2 (X10): Sentinel reads the same ledger and shows it as its live knowledge graph.
 
 ### Selftest
 
