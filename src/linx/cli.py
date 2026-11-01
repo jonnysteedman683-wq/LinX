@@ -7,6 +7,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from linx import bridges
 from linx.doctor import doctor
@@ -29,6 +30,11 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--ledger", required=True, help="UniSync JSONL file; created if missing, appended in place"
     )
+    lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
+    lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
+    lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
+    lv.add_argument("--interval", type=float, default=5.0, help="seconds between polls (default 5)")
+    lv.add_argument("--once", action="store_true", help="poll once and exit (for cron / scheduled runs)")
     return p
 
 
@@ -76,6 +82,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.cmd == "relay":
         return _relay(Path(args.events), Path(args.ledger))
+    if args.cmd == "relay-live":
+        return _relay_live(args.vortex_url, args.ledger, args.interval, args.once)
 
     print(json.dumps(bridges.crosstest_manifest(reg, bridges.KNOWN_COMMANDS), indent=2))
     return 0
@@ -102,6 +110,35 @@ def _relay(events_path: Path, ledger_path: Path) -> int:
     ledger_path.write_text(ledger.to_jsonl(), encoding="utf-8")
     print(f"relayed {n} event(s); cursor {cursor(ledger)}")
     return 0
+
+
+def _relay_live(vortex_url: str, ledger_path: str | None, interval: float, once: bool) -> int:
+    import logging
+    import os
+
+    from linx import live
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    try:
+        fetch = live.http_fetch(vortex_url, os.environ.get("VORTEX_OPERATOR_TOKEN", ""))
+        ledger: Any
+        if ledger_path:
+            ledger = live.FileLedger(ledger_path)
+        else:
+            from lestinxor.unisync_supabase import SupabaseLedger
+
+            ledger = SupabaseLedger()
+        stats = live.run(ledger, fetch, interval=interval, max_polls=1 if once else None)
+    except ImportError:
+        print("linx: install `linx[unisync]` to relay", file=sys.stderr)
+        return 2
+    except (live.LiveError, ValueError) as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    except KeyboardInterrupt:
+        return 0
+    print(f"relayed {stats.relayed} event(s) in {stats.polls} poll(s); {stats.errors} error(s)")
+    return 1 if stats.errors and not stats.relayed and once else 0
 
 
 if __name__ == "__main__":

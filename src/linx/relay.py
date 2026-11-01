@@ -89,7 +89,10 @@ def relay(ledger: LedgerLike, events: Iterable[Mapping[str, Any]]) -> int:
         raise RelayError("duplicate event_id in feed")
     start = cursor(ledger)
     fresh = sorted((e for e in batch if e["event_id"] > start), key=lambda e: e["event_id"])
+    posted = 0
     for event in fresh:
+        if cursor(ledger) >= event["event_id"]:
+            continue  # another relay posted it after our first read (a shared ledger re-syncs on post)
         state = _state(event)
         ledger.post(SENDER, "memory.write", key=f"task/{event['task_id']}", value=state, scope=SCOPE)
         if event["event_type"] == "blocked":
@@ -101,7 +104,8 @@ def relay(ledger: LedgerLike, events: Iterable[Mapping[str, Any]]) -> int:
                 vortex_task=event["task_id"],
                 actor=event["actor_id"],
             )
-    return len(fresh)
+        posted += 1
+    return posted
 
 
 def tasks(ledger: LedgerLike) -> dict[str, dict[str, Any]]:

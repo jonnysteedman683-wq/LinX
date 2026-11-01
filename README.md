@@ -50,6 +50,26 @@ UniSync ledger as the `vortex` watcher. Each event becomes a `memory.write` (sco
 tasks are never re-dispatched as UniSync tasks. The cursor is read back from the ledger, so running
 it twice appends nothing. Malformed events abort the whole batch before anything is posted.
 
+### Live relay
+
+`linx relay-live` polls Vortex's operator feed (`GET /events?after=N&once=1`) and relays new events
+as they land. By default it writes to the shared Supabase ledger.
+
+```bash
+export VORTEX_OPERATOR_TOKEN=...                 # an operator's bearer token; never pass it as an argument
+export UNISYNC_SUPABASE_URL=https://<ref>.supabase.co UNISYNC_SUPABASE_KEY=...   # service-role key
+linx relay-live --vortex-url https://vortex.example            # runs until Ctrl-C, polls every 5s
+linx relay-live --vortex-url http://127.0.0.1:8000 --ledger unisync.jsonl --once   # local, one poll
+```
+
+- It resumes from the ledger's own cursor, so a restart or a crash loses and duplicates nothing.
+  If a second relay posts first, events are skipped instead of posted twice.
+- Network failures and 5xx responses back off (5s, 10s, … up to 5 min) and retry. 401/403/404 and
+  malformed events stop the relay with exit code 2: retrying can't fix them, and skipping would lose data.
+- Plain `http` is accepted only for loopback, matching Vortex's own policy.
+- Where to run it: next to Vortex (e.g. a scheduled task or service on the same machine, pointing at
+  `http://127.0.0.1:8000`), or as a `--once` job on any free scheduler. Run one relay per ledger.
+
 ## Checks
 
 ```bash
