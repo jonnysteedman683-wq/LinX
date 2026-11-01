@@ -1,0 +1,15 @@
+# LinX backlog
+
+Take the first unchecked item not marked 🔒. One item, one PR.
+
+- [x] **X1** Registry (`systems.json`) of all nine systems, `linx systems`, `linx doctor`, `linx unisync`, `linx crosstest`.
+- [ ] **X2** Register `horizontal`, `vortex`, `neurocore` as UniSync agents: PR to Lestinxor's `DEFAULT_AGENTS` and `unisync/schema.sql` (SQL from `linx unisync`). *Done when* `linx unisync` prints "already".
+- [ ] **X3** Vortex ↔ UniSync relay: mirror Vortex task events (create/claim/complete/approve) into UniSync envelopes, read-only on Vortex. *Done when* a scripted Vortex event log replays into a verifying `Ledger`.
+- [ ] **X4** Memory bridge: `memory.write` envelopes → HORIZONTAL-VAULT `02_Cards` markdown (dry-run output only; HORIZONTAL writes the vault). *Done when* golden-file test passes.
+- [ ] **X5** `linx status`: one table joining doctor + UniSync (open tasks, pending approvals per system).
+- [ ] **X6** Neurocore intents → UniSync `task.request` via Hermes, always `requires_approval: true`.
+- [ ] 🔒 **X7** CI workflow (needs owner decision: free Actions minutes only).
+
+## Proposed
+- Sentinel reads the UniSync ledger as its knowledge-graph source.
+- HIVE-MIND-SWARM-OS public status page fed by `linx status --json`.

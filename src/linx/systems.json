@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "owner": "jonnysteedman683-wq",
+  "systems": [
+    {"name": "lestinxor", "repo": "LESTINXOR-AGENT", "lang": "python", "layer": "orchestration", "role": "orchestrator",
+     "does": "Outer evolutionary thought search over inner Gauntlet runs; owns the UniSync reference implementation.",
+     "checks": [["python", "-m", "pytest", "-q"]]},
+    {"name": "o0", "repo": "O0", "lang": "python", "layer": "orchestration", "role": "orchestrator",
+     "does": "Constitution-governed self-improvement flywheel with a sha256-bound capability ledger.",
+     "checks": [["python", "-m", "pytest", "tests/", "-q"]]},
+    {"name": "sebastian", "repo": "Sebastian", "lang": "python", "layer": "execution", "role": "worker",
+     "does": "Sandboxed, budgeted coding agent; runs crosstest across every agent.",
+     "checks": [["python", "-m", "pytest", "-q"]]},
+    {"name": "horizontal", "repo": "HORIZONTAL", "lang": "python", "layer": "execution", "role": "worker",
+     "does": "Stdlib-only evolution engine and multi-agent foundry. Tests must run isolated, never in place.",
+     "checks": [["python", "-m", "compileall", "-q", "."], ["python", "_Meta/Scripts/run_tests_isolated.py"]]},
+    {"name": "vortex", "repo": "Vortex-MCP", "lang": "python", "layer": "transport", "role": "watcher",
+     "does": "Authenticated MCP coordination server: task queue, leases, operator approvals.",
+     "checks": [["python", "-m", "pytest", "-q"]]},
+    {"name": "horizontal-vault", "repo": "HORIZONTAL-VAULT", "lang": "markdown", "layer": "memory", "role": null,
+     "does": "Obsidian vault: agents, cards, sources and ledgers written by HORIZONTAL.",
+     "checks": []},
+    {"name": "sentinel", "repo": "Sentinel", "lang": "typescript", "layer": "memory", "role": null,
+     "does": "Arcane Quantum Brain: knowledge-graph memory consolidation and visual UI.",
+     "checks": [["npm", "test", "--silent"]]},
+    {"name": "neurocore", "repo": "neurocore", "lang": "typescript", "layer": "interface", "role": "worker",
+     "does": "Safety-gated neural (EEG/BCI) intent control plane, exposed to Hermes over MCP.",
+     "checks": [["pnpm", "test"]]},
+    {"name": "hive-mind", "repo": "HIVE-MIND-SWARM-OS", "lang": "wix", "layer": "interface", "role": null,
+     "does": "Wix site: the public / operator web front end.",
+     "checks": [["npm", "run", "lint"]]}
+  ]
+}
