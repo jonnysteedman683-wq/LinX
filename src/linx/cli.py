@@ -11,7 +11,7 @@ from typing import Any
 
 from linx import bridges
 from linx.doctor import doctor
-from linx.registry import LAYERS, RegistryError, load
+from linx.registry import LAYERS, Registry, RegistryError, load
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -30,6 +30,10 @@ def _parser() -> argparse.ArgumentParser:
     r.add_argument(
         "--ledger", required=True, help="UniSync JSONL file; created if missing, appended in place"
     )
+    st = sub.add_parser("status", help="checkouts + UniSync: task load, approvals, escalations, Vortex tasks")
+    st.add_argument("--root", default="..", help="folder holding all the repo checkouts (default: ..)")
+    st.add_argument("--ledger", help="UniSync JSONL file (default: Supabase if UNISYNC_SUPABASE_URL is set)")
+    st.add_argument("--json", action="store_true", help="machine-readable output")
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -83,6 +87,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.cmd == "relay":
         return _relay(Path(args.events), Path(args.ledger))
+    if args.cmd == "status":
+        return _status(reg, Path(args.root).resolve(), args.ledger, args.json)
     if args.cmd == "relay-live":
         return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
@@ -111,6 +117,36 @@ def _relay(events_path: Path, ledger_path: Path) -> int:
     ledger_path.write_text(ledger.to_jsonl(), encoding="utf-8")
     print(f"relayed {n} event(s); cursor {cursor(ledger)}")
     return 0
+
+
+def _status(reg: Registry, root: Path, ledger_path: str | None, as_json: bool) -> int:
+    import os
+
+    from linx import status
+
+    ledger: Any = None
+    source = "none"
+    try:
+        if ledger_path:
+            from lestinxor.unisync import Ledger
+
+            ledger = Ledger.from_jsonl(Path(ledger_path).read_text(encoding="utf-8"))
+            source = ledger_path
+        elif os.environ.get("UNISYNC_SUPABASE_URL"):
+            from lestinxor.unisync_supabase import SupabaseLedger
+
+            remote = SupabaseLedger()
+            remote.sync()
+            ledger, source = remote.ledger, "supabase"
+    except ImportError:
+        print("linx: install `linx[unisync]` to read the ledger", file=sys.stderr)
+        return 2
+    except Exception as exc:  # unreadable file, tampered row (ProtocolError), network: report, don't trace
+        print(f"linx: cannot read ledger: {exc}", file=sys.stderr)
+        return 2
+    fleet = status.build(reg, root, ledger, source)
+    print(json.dumps(fleet.to_dict(), indent=2) if as_json else status.render(fleet))
+    return 1 if fleet.verified is False else 0
 
 
 def _relay_live(
