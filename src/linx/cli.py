@@ -35,6 +35,7 @@ def _parser() -> argparse.ArgumentParser:
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
     lv.add_argument("--interval", type=float, default=5.0, help="seconds between polls (default 5)")
     lv.add_argument("--once", action="store_true", help="poll once and exit (for cron / scheduled runs)")
+    lv.add_argument("--log-file", help="append logs here (UTF-8) instead of stderr")
     return p
 
 
@@ -83,7 +84,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.cmd == "relay":
         return _relay(Path(args.events), Path(args.ledger))
     if args.cmd == "relay-live":
-        return _relay_live(args.vortex_url, args.ledger, args.interval, args.once)
+        return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
     print(json.dumps(bridges.crosstest_manifest(reg, bridges.KNOWN_COMMANDS), indent=2))
     return 0
@@ -112,13 +113,20 @@ def _relay(events_path: Path, ledger_path: Path) -> int:
     return 0
 
 
-def _relay_live(vortex_url: str, ledger_path: str | None, interval: float, once: bool) -> int:
+def _relay_live(
+    vortex_url: str, ledger_path: str | None, interval: float, once: bool, log_file: str | None = None
+) -> int:
     import logging
     import os
 
     from linx import live
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    fmt = "%(asctime)s %(levelname)s %(message)s"
+    if log_file:
+        logging.basicConfig(level=logging.INFO, format=fmt, filename=log_file, encoding="utf-8", force=True)
+    else:
+        logging.basicConfig(level=logging.INFO, format=fmt)
+    log = logging.getLogger("linx.live")
     try:
         fetch = live.http_fetch(vortex_url, os.environ.get("VORTEX_OPERATOR_TOKEN", ""))
         ledger: Any
@@ -130,14 +138,18 @@ def _relay_live(vortex_url: str, ledger_path: str | None, interval: float, once:
             ledger = SupabaseLedger()
         stats = live.run(ledger, fetch, interval=interval, max_polls=1 if once else None)
     except ImportError:
+        log.error("install `linx[unisync]` to relay")
         print("linx: install `linx[unisync]` to relay", file=sys.stderr)
         return 2
     except (live.LiveError, ValueError) as exc:
+        log.error("%s", exc)
         print(f"linx: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         return 0
-    print(f"relayed {stats.relayed} event(s) in {stats.polls} poll(s); {stats.errors} error(s)")
+    summary = f"relayed {stats.relayed} event(s) in {stats.polls} poll(s); {stats.errors} error(s)"
+    log.info("%s", summary)
+    print(summary)
     return 1 if stats.errors and not stats.relayed and once else 0
 
 
