@@ -9,7 +9,7 @@ Take the first unchecked item not marked 🔒. One item, one PR.
 - [ ] **X4** Memory bridge: `memory.write` envelopes → HORIZONTAL-VAULT `02_Cards` markdown (dry-run output only; HORIZONTAL writes the vault). *Done when* golden-file test passes.
 - [ ] **X5** `linx status`: one table joining doctor + UniSync (open tasks, pending approvals per system).
 - [ ] **X6** Neurocore intents → UniSync `task.request` via Hermes, always `requires_approval: true`.
-- [ ] 🔒 **X8** Host the live relay (owner decision: same machine as Vortex vs a free scheduler; needs Vortex operator token + Supabase key as secrets).
+- [x] **X8** Host the live relay: owner chose the same machine as Vortex. `Register-LinxRelayTask.ps1`, `START_LINX_RELAY.bat`, `scripts/windows/Start-LinxRelay.ps1`, `relay-live --log-file`, `python -m linx`.
 - [ ] 🔒 **X7** CI workflow (needs owner decision: free Actions minutes only).
 
 ## Proposed

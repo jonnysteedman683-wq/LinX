@@ -171,3 +171,33 @@ def test_cli_relay_live_once(
     assert main(["relay-live", "--vortex-url", "https://v.example", "--ledger", str(out), "--once"]) == 2
     monkeypatch.setattr(live, "http_fetch", lambda url, token: FakeVortex(failures=[TimeoutError()]))
     assert main(["relay-live", "--vortex-url", "https://v.example", "--ledger", str(out), "--once"]) == 1
+
+
+def test_cli_relay_live_log_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("VORTEX_OPERATOR_TOKEN", "tok")
+    monkeypatch.setattr(live, "http_fetch", lambda url, token: FakeVortex(failures=[http_error(403)]))
+    logf = tmp_path / "relay.log"
+    args = [
+        "relay-live",
+        "--vortex-url",
+        "https://v.example",
+        "--ledger",
+        str(tmp_path / "u.jsonl"),
+        "--once",
+    ]
+    assert main([*args, "--log-file", str(logf)]) == 2
+    monkeypatch.setattr(live, "http_fetch", lambda url, token: FakeVortex(page=10))
+    assert main([*args, "--log-file", str(logf)]) == 0
+    text = logf.read_text(encoding="utf-8")
+    assert "ERROR Vortex refused the request (HTTP 403)" in text
+    assert "relayed 6 event(s) in 1 poll(s)" in text
+
+
+def test_python_dash_m_linx_entry_point() -> None:
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [sys.executable, "-m", "linx", "systems"], capture_output=True, text=True, check=True
+    )
+    assert "orchestration:" in out.stdout

@@ -67,8 +67,23 @@ linx relay-live --vortex-url http://127.0.0.1:8000 --ledger unisync.jsonl --once
 - Network failures and 5xx responses back off (5s, 10s, … up to 5 min) and retry. 401/403/404 and
   malformed events stop the relay with exit code 2: retrying can't fix them, and skipping would lose data.
 - Plain `http` is accepted only for loopback, matching Vortex's own policy.
-- Where to run it: next to Vortex (e.g. a scheduled task or service on the same machine, pointing at
-  `http://127.0.0.1:8000`), or as a `--once` job on any free scheduler. Run one relay per ledger.
+- Run one relay per ledger. `--log-file PATH` appends logs (UTF-8) instead of writing to stderr.
+
+#### On Windows, next to Vortex
+
+```powershell
+pip install -e ".[unisync]"                 # from the LinX folder, into the python the task will use
+.\Register-LinxRelayTask.ps1 -SetSecrets    # Vortex operator token, Supabase URL + service-role key (once)
+.\Register-LinxRelayTask.ps1 -Run           # run in this window; Ctrl+C when it says "relayed ..."
+.\Register-LinxRelayTask.ps1 -Register      # start at every logon (Task Scheduler, or Startup folder without admin)
+.\Register-LinxRelayTask.ps1 -Status        # registered?, which settings are set, last log lines
+```
+
+`START_LINX_RELAY.bat` runs it in a console window. Logs: `%LOCALAPPDATA%\LinX\relay.log`.
+`scripts/windows/Start-LinxRelay.ps1` restarts the relay if it crashes (10 s, doubling to 10 min) but
+stops on exit code 2 (bad token, URL or data), so a wrong setting never hammers Vortex. Secrets are
+user environment variables, never files in the repo. Optional: `LINX_VORTEX_URL` (default
+`http://127.0.0.1:8000`), `LINX_LEDGER` (local JSONL instead of Supabase), `LINX_PYTHON`.
 
 ## Checks
 
