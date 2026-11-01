@@ -40,7 +40,29 @@ linx doctor --checks              # also run every system's own checks
 linx unisync                      # SQL that registers missing systems on the UniSync ledger
 linx crosstest > agents.json      # then: sebastian crosstest --manifest agents.json --dry-run
 linx relay events.json --ledger unisync.jsonl   # mirror a Vortex event feed onto UniSync
+linx status                       # one view: checkouts + UniSync (Supabase if configured)
+linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
+
+### Status
+
+```
+system            layer          checkout  held open appr done fail  last
+lestinxor         orchestration  565e6f2      0    0    0    0    0  -
+vortex            transport      b8c5636      0    0    0    0    0  #4
+sentinel          memory         481fd81      -    -    -    -    -  -
+...
+ledger: supabase, 5 entries, verified
+pending approvals: 0
+vortex tasks: blocked 1, open 1
+recent escalations:
+  #3 vortex: Vortex task fc64f054-… blocked: vault locked
+```
+
+`held` = tasks the agent has claimed, `open` = tasks it requested that are still in flight, `appr` =
+its requests waiting on Jonny, `done`/`fail` = tasks it finished, `last` = its latest ledger entry.
+Systems without a UniSync role show `-`. Reading the ledger re-verifies the whole hash chain; a
+tampered or rule-breaking row exits 2 instead of showing numbers.
 
 ### Vortex → UniSync relay
 
