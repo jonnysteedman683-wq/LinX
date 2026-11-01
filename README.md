@@ -39,9 +39,16 @@ linx doctor                       # which checkouts exist, and at which commit
 linx doctor --checks              # also run every system's own checks
 linx unisync                      # SQL that registers missing systems on the UniSync ledger
 linx crosstest > agents.json      # then: sebastian crosstest --manifest agents.json --dry-run
+linx relay events.json --ledger unisync.jsonl   # mirror a Vortex event feed onto UniSync
 ```
 
-`linx unisync` today reports that `horizontal`, `vortex` and `neurocore` aren't UniSync agents yet.
+### Vortex → UniSync relay
+
+`linx relay` takes the JSON array returned by Vortex's `vortex_operator_events` and posts it to a
+UniSync ledger as the `vortex` watcher. Each event becomes a `memory.write` (scope `vortex`, key
+`task/<id>`) holding that task's latest state; a `blocked` event also posts an `escalate`. Vortex
+tasks are never re-dispatched as UniSync tasks. The cursor is read back from the ledger, so running
+it twice appends nothing. Malformed events abort the whole batch before anything is posted.
 
 ## Checks
 
