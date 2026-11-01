@@ -34,6 +34,11 @@ def _parser() -> argparse.ArgumentParser:
     st.add_argument("--root", default="..", help="folder holding all the repo checkouts (default: ..)")
     st.add_argument("--ledger", help="UniSync JSONL file (default: Supabase if UNISYNC_SUPABASE_URL is set)")
     st.add_argument("--json", action="store_true", help="machine-readable output")
+    sf = sub.add_parser("selftest", help="read-only check that the whole chain works on this machine")
+    sf.add_argument("--root", default="..", help="folder holding all the repo checkouts (default: ..)")
+    sf.add_argument(
+        "--vortex-url", help="Vortex root (default: $LINX_VORTEX_URL; token: $VORTEX_OPERATOR_TOKEN)"
+    )
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -89,6 +94,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _relay(Path(args.events), Path(args.ledger))
     if args.cmd == "status":
         return _status(reg, Path(args.root).resolve(), args.ledger, args.json)
+    if args.cmd == "selftest":
+        return _selftest(reg, Path(args.root).resolve(), args.vortex_url)
     if args.cmd == "relay-live":
         return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
@@ -147,6 +154,24 @@ def _status(reg: Registry, root: Path, ledger_path: str | None, as_json: bool) -
     fleet = status.build(reg, root, ledger, source)
     print(json.dumps(fleet.to_dict(), indent=2) if as_json else status.render(fleet))
     return 1 if fleet.verified is False else 0
+
+
+def _selftest(reg: Registry, root: Path, vortex_url: str | None) -> int:
+    import os
+
+    from linx import selftest
+
+    env = os.environ.get
+    steps = selftest.run(
+        reg,
+        root,
+        vortex_url or env("LINX_VORTEX_URL", ""),
+        env("VORTEX_OPERATOR_TOKEN", ""),
+        env("UNISYNC_SUPABASE_URL", ""),
+        env("UNISYNC_SUPABASE_KEY", ""),
+    )
+    print(selftest.render(steps))
+    return 1 if any(s.result == selftest.FAIL for s in steps) else 0
 
 
 def _relay_live(

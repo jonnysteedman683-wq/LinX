@@ -41,8 +41,24 @@ linx unisync                      # SQL that registers missing systems on the Un
 linx crosstest > agents.json      # then: sebastian crosstest --manifest agents.json --dry-run
 linx relay events.json --ledger unisync.jsonl   # mirror a Vortex event feed onto UniSync
 linx status                       # one view: checkouts + UniSync (Supabase if configured)
+linx selftest                     # read-only PASS/FAIL check of the whole chain on this machine
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
+
+### Selftest
+
+```
+[PASS] unisync    12 agents known, all LinX agents present
+[PASS] relay      4 events relayed, replay verifies, re-run adds nothing, status reads it
+[INFO] checkouts  9/9 under C:\Users\jonny\repos
+[PASS] vortex     http://127.0.0.1:8000 answered with 7 event(s); 7 relayed into a throwaway ledger
+[FAIL] supabase   12 entries verify, but agents not registered: horizontal, neurocore, vortex
+                  fix: run Lestinxor's unisync/schema.sql in the Supabase SQL editor (safe to re-run)
+```
+
+Nothing is written anywhere: Vortex events go into a throwaway in-memory ledger, and Supabase is only
+read. `vortex` uses `LINX_VORTEX_URL` (or `--vortex-url`) and `VORTEX_OPERATOR_TOKEN`; `supabase` uses
+`UNISYNC_SUPABASE_URL`/`_KEY`. Each is skipped when its settings are absent. Exit 1 if anything failed.
 
 ### Status
 
@@ -96,6 +112,7 @@ linx relay-live --vortex-url http://127.0.0.1:8000 --ledger unisync.jsonl --once
 ```powershell
 pip install -e ".[unisync]"                 # from the LinX folder, into the python the task will use
 .\Register-LinxRelayTask.ps1 -SetSecrets    # Vortex operator token, Supabase URL + service-role key (once)
+.\Register-LinxRelayTask.ps1 -SelfTest      # read-only: PASS/FAIL for UniSync, relay, Vortex, Supabase
 .\Register-LinxRelayTask.ps1 -Run           # run in this window; Ctrl+C when it says "relayed ..."
 .\Register-LinxRelayTask.ps1 -Register      # start at every logon (Task Scheduler, or Startup folder without admin)
 .\Register-LinxRelayTask.ps1 -Status        # registered?, which settings are set, last log lines
