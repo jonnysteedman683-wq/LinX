@@ -24,6 +24,11 @@ def _parser() -> argparse.ArgumentParser:
     u = sub.add_parser("unisync", help="systems missing from the UniSync ledger, as SQL to register them")
     u.add_argument("--registered", help="comma-separated agent names (default: read from lestinxor)")
     sub.add_parser("crosstest", help="print a `sebastian crosstest` manifest for systems that support it")
+    r = sub.add_parser("relay", help="mirror a Vortex event feed (JSON array) onto a UniSync JSONL ledger")
+    r.add_argument("events", help="JSON array from vortex_operator_events")
+    r.add_argument(
+        "--ledger", required=True, help="UniSync JSONL file; created if missing, appended in place"
+    )
     return p
 
 
@@ -69,7 +74,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(bridges.unisync_sql(reg, registered), end="")
         return 0
 
+    if args.cmd == "relay":
+        return _relay(Path(args.events), Path(args.ledger))
+
     print(json.dumps(bridges.crosstest_manifest(reg, bridges.KNOWN_COMMANDS), indent=2))
+    return 0
+
+
+def _relay(events_path: Path, ledger_path: Path) -> int:
+    try:
+        from lestinxor.unisync import Ledger, ProtocolError
+    except ImportError:
+        print("linx: install `linx[unisync]` to relay", file=sys.stderr)
+        return 2
+    from linx.relay import RelayError, cursor, relay
+
+    try:
+        events = json.loads(events_path.read_text(encoding="utf-8"))
+        if not isinstance(events, list):
+            raise RelayError("events file must hold a JSON array")
+        text = ledger_path.read_text(encoding="utf-8") if ledger_path.exists() else ""
+        ledger = Ledger.from_jsonl(text)
+        n = relay(ledger, events)
+    except (OSError, json.JSONDecodeError, RelayError, ProtocolError) as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    ledger_path.write_text(ledger.to_jsonl(), encoding="utf-8")
+    print(f"relayed {n} event(s); cursor {cursor(ledger)}")
     return 0
 
 
