@@ -4,7 +4,8 @@ param(
     [switch]$Register,
     [switch]$Unregister,
     [switch]$Status,
-    [switch]$Run
+    [switch]$Run,
+    [switch]$SelfTest
 )
 
 $TaskName = "LinX-Relay"
@@ -77,6 +78,21 @@ if ($Register) {
     exit 0
 }
 
+if ($SelfTest) {
+    # Read-only: relays a built-in feed, then (if configured) reads the real Vortex and Supabase.
+    foreach ($name in "VORTEX_OPERATOR_TOKEN", "UNISYNC_SUPABASE_URL", "UNISYNC_SUPABASE_KEY", "LINX_VORTEX_URL") {
+        $value = [Environment]::GetEnvironmentVariable($name, "User")
+        if ($value -and -not [Environment]::GetEnvironmentVariable($name, "Process")) {
+            [Environment]::SetEnvironmentVariable($name, $value, "Process")
+        }
+    }
+    if (-not $env:LINX_VORTEX_URL) { $env:LINX_VORTEX_URL = "http://127.0.0.1:8000" }
+    $python = [Environment]::GetEnvironmentVariable("LINX_PYTHON", "User")
+    if (-not $python) { $python = "python" }
+    & $python -m linx selftest --root (Split-Path -Parent $RepoRoot)
+    exit $LASTEXITCODE
+}
+
 if ($Run) {
     & powershell.exe -ExecutionPolicy Bypass -File "$ServiceScript" -Foreground
     exit $LASTEXITCODE
@@ -85,6 +101,7 @@ if ($Run) {
 Show-Status
 Write-Host "`nUsage:" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -SetSecrets   # store token, Supabase URL/key (once)" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -SelfTest     # read-only check: UniSync, relay, Vortex, Supabase" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -Run          # run in this window to check it works" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -Register     # start at every logon" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -Unregister   # remove" -ForegroundColor DarkGray
