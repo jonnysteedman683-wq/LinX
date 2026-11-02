@@ -304,3 +304,63 @@ def post(ledger: Any, sender: str, report: Report) -> int:
     }
     ledger.post(sender, "memory.write", key="consolidation", value=summary, scope=SUMMARY_SCOPE)
     return posted + 1
+
+
+# ── the active loop ──────────────────────────────────────────────────────────
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Network trouble worth retrying; anything else (protocol, auth, config) is not."""
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code == 429 or exc.code >= 500
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
+def run(
+    ledger: Any,
+    sender: str,
+    *,
+    stale_after: int = 500,
+    every: float | None = None,
+    max_rounds: int | None = None,
+    max_backoff: float = 600.0,
+    sleep: Any = None,
+    log: Any = None,
+) -> int:
+    """Consolidate once, or every `every` seconds. Transient network errors back off and retry;
+    anything else is raised. Returns the total envelopes posted."""
+    import logging
+    import time
+
+    sleep = sleep or time.sleep
+    log = log or logging.getLogger("linx.memory")
+    rounds = posted = 0
+    delay = every or 0.0
+    while True:
+        rounds += 1
+        try:
+            sync = getattr(ledger, "sync", None)
+            if callable(sync):
+                sync()
+            view = getattr(ledger, "ledger", ledger)
+            report = consolidate(view.entries, stale_after=stale_after)
+            n = post(ledger, sender, report)
+            posted += n
+            delay = every or 0.0
+            log.info(
+                "%d facts, %d conflicts, %d stale; posted %d",
+                report.facts,
+                len(report.conflicts),
+                len(report.stale),
+                n,
+            )
+        except Exception as exc:
+            if not every or not is_transient(exc):
+                raise
+            delay = min(max(delay * 2, every), max_backoff)
+            log.warning("transient error (%s); retrying in %.0fs", exc, delay)
+        if not every or (max_rounds is not None and rounds >= max_rounds):
+            return posted
+        sleep(delay)
