@@ -141,6 +141,24 @@ Plain http is accepted only for loopback, so the model must run on this machine 
 
 ### Owner controls: kill switch, approvals, phone digest
 
+**Signed owner actions (do this first).** Without an owner key, the ledger checks the *name* on owner
+entries, so anything that can write rows could approve or halt as `jonny`. With one, every owner entry
+needs a signature only your seed can make (Lestinxor `owner_sig`: hash-based, stdlib-only, post-quantum).
+
+```powershell
+linx owner init        # secret seed -> %LOCALAPPDATA%\LinX\owner.seed; prints your public owner key
+linx owner pin         # prints the owner_key setting, enforced from the next ledger entry
+setx UNISYNC_OWNER_KEY <key>   &  setx UNISYNC_OWNER_FROM <n>    # or commit owner_key to systems.json
+linx owner status      # pinned key, enforced-from, and whether this machine can sign
+```
+
+On the machine with the seed, `approve`, `reject`, `halt`, `resume`, `task`, `memory put --as jonny` and
+`nightly retry` are signed automatically. Every reader (relay, memory and nightly loops, status, Sentinel's
+next update) refuses unsigned, forged or doctored owner entries; a doctored row makes the ledger refuse
+to load rather than take effect. **Back the seed up** (password manager): it is the owner's identity;
+losing it means `linx owner init --force` and re-pinning. It holds 1024 one-time keys; `linx owner
+status` and `selftest` show the state.
+
 - `linx halt --reason "..."` stops `linx nightly` (plan and work refuse, exit 3) and pauses the memory
   loop; the relay keeps mirroring. `linx resume` lifts it. Only `jonny`'s own writes to
   `linx/control/halt` count, so no agent can halt the fleet or lift a halt. The halt shows at the top of

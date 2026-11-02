@@ -75,6 +75,8 @@ class System:
 class Registry:
     owner: str
     systems: tuple[System, ...]
+    owner_key: str | None = None  # pinned public owner key (lestinxor owner_sig Merkle root, hex)
+    owner_from: int = 0  # ledger seq from which owner entries must be signed
 
     def __iter__(self) -> Iterator[System]:
         return iter(self.systems)
@@ -103,7 +105,16 @@ class Registry:
         dupes = sorted({n for n in names if names.count(n) > 1})
         if dupes:
             raise RegistryError(f"duplicate system names: {dupes}")
-        return cls(owner, systems)
+        pin = raw.get("owner_key") or {}
+        if not isinstance(pin, Mapping):
+            raise RegistryError("owner_key must be an object with 'root' and 'from'")
+        root = pin.get("root")
+        start = pin.get("from", 0)
+        if root is not None and (not isinstance(root, str) or len(root) != 64):
+            raise RegistryError("owner_key.root must be a 64-character hex string")
+        if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+            raise RegistryError("owner_key.from must be a non-negative integer")
+        return cls(owner, systems, root, start)
 
 
 def load(path: str | Path | None = None) -> Registry:

@@ -152,6 +152,13 @@ def _parser() -> argparse.ArgumentParser:
         "--index", help="index file (default: $LINX_INDEX or %%LOCALAPPDATA%%\\LinX\\index.sqlite)"
     )
     ex.add_argument("--no-model", action="store_true", help="show passages even if LINX_LLM_URL is set")
+    ow = sub.add_parser("owner", help="owner key: sign approvals/halts so nobody else can make them")
+    osub = ow.add_subparsers(dest="ocmd", required=True)
+    oi = osub.add_parser("init", help="create the secret owner seed on this machine; prints the public key")
+    oi.add_argument("--force", action="store_true", help="replace an existing seed (rotates the owner key)")
+    osub.add_parser("status", help="pinned key, enforcement start, and whether this machine can sign")
+    op = osub.add_parser("pin", help="print the owner_key setting to enforce signatures from now on")
+    op.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
     ak = sub.add_parser("ask", help="plain English -> one LinX command, run after you confirm")
     ak.add_argument("text", nargs="+", help='e.g. linx ask "what is waiting for me"')
     ak.add_argument("--ledger", help="UniSync JSONL file passed to the command (default: Supabase)")
@@ -173,6 +180,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (RegistryError, OSError) as exc:
         print(f"linx: {exc}", file=sys.stderr)
         return 2
+    global _REG
+    _REG = reg
 
     if args.cmd == "systems":
         groups = reg.by_layer()
@@ -222,6 +231,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _control(args)
     if args.cmd == "ask":
         return _ask(args)
+    if args.cmd == "owner":
+        return _owner(reg, args)
     if args.cmd == "explain":
         return _explain(reg, args)
     if args.cmd in ("brief", "repos", "backlog", "log", "find", "check", "task"):
@@ -246,7 +257,8 @@ def _relay(events_path: Path, ledger_path: Path) -> int:
         if not isinstance(events, list):
             raise RelayError("events file must hold a JSON array")
         text = ledger_path.read_text(encoding="utf-8") if ledger_path.exists() else ""
-        ledger = Ledger.from_jsonl(text)
+        kw = _owner_kwargs(sign=False)
+        ledger = Ledger.from_jsonl(text, **kw)
         n = relay(ledger, events)
     except (OSError, json.JSONDecodeError, RelayError, ProtocolError) as exc:
         print(f"linx: {exc}", file=sys.stderr)
@@ -267,12 +279,14 @@ def _status(reg: Registry, root: Path, ledger_path: str | None, as_json: bool) -
         if ledger_path:
             from lestinxor.unisync import Ledger
 
-            ledger = Ledger.from_jsonl(Path(ledger_path).read_text(encoding="utf-8"))
+            ledger = Ledger.from_jsonl(
+                Path(ledger_path).read_text(encoding="utf-8"), **_owner_kwargs(sign=False)
+            )
             source = ledger_path
         elif os.environ.get("UNISYNC_SUPABASE_URL"):
             from lestinxor.unisync_supabase import SupabaseLedger
 
-            remote = SupabaseLedger()
+            remote = SupabaseLedger(**_owner_kwargs(sign=False))
             remote.sync()
             ledger, source = remote.ledger, "supabase"
     except ImportError:
@@ -309,15 +323,73 @@ def _split_ref(ref: str) -> tuple[str, str]:
     return (scope or "shared"), key
 
 
+_REG: Registry | None = None  # the registry main() loaded: carries the pinned owner key
+
+
+def _owner_kwargs(sign: bool = True) -> dict[str, Any]:
+    from linx import owner
+
+    return owner.ledger_kwargs(_REG, sign=sign)
+
+
+def _owner(reg: Registry, args: argparse.Namespace) -> int:
+    from linx import owner
+
+    if args.ocmd == "init":
+        try:
+            root = owner.init(force=args.force)
+        except FileExistsError as exc:
+            print(f"linx: {exc}", file=sys.stderr)
+            return 2
+        print(f"owner seed written to {owner.seed_path()} (keep it secret and backed up)")
+        print(f"public owner key: {root}")
+        print("next: `linx owner pin` to start enforcing it")
+        return 0
+    if args.ocmd == "status":
+        print("\n".join(owner.status(reg)))
+        return 0
+    path = owner.seed_path()  # pin
+    if not path.exists():
+        print("linx: no owner seed on this machine; run `linx owner init` first", file=sys.stderr)
+        return 2
+    root = owner.load_key(path).root
+    try:
+        from linx import live
+
+        if args.ledger:
+            head = len(live.FileLedger(args.ledger).ledger.entries)
+        else:
+            from lestinxor.unisync_supabase import SupabaseLedger
+
+            remote = SupabaseLedger()
+            remote.sync()
+            head = len(remote.ledger.entries)
+    except Exception as exc:
+        print(f"linx: cannot open ledger: {exc}", file=sys.stderr)
+        return 2
+    import json as _json
+
+    print("Enforce signed owner actions from the next ledger entry on. Either commit this to systems.json:")
+    print(_json.dumps({"owner_key": {"root": root, "from": head}}, indent=2))
+    print("or set it for this user (every machine that reads the ledger needs the same pin):")
+    print(f"  setx UNISYNC_OWNER_KEY {root}")
+    print(f"  setx UNISYNC_OWNER_FROM {head}")
+    return 0
+
+
 def _open_ledger(path: str | None) -> tuple[Any, str]:
-    """A postable ledger (`FileLedger` or `SupabaseLedger`, both expose `.ledger`) and its source name."""
+    """A postable ledger (`FileLedger` or `SupabaseLedger`, both expose `.ledger`) and its source name.
+
+    With a pinned owner key, owner entries are verified on read and, if this machine holds the owner
+    seed, signed on write.
+    """
     from linx import live
 
     if path:
-        return live.FileLedger(path), path
+        return live.FileLedger(path, **_owner_kwargs()), path
     from lestinxor.unisync_supabase import SupabaseLedger
 
-    remote = SupabaseLedger()
+    remote = SupabaseLedger(**_owner_kwargs())
     remote.sync()
     return remote, "supabase"
 
@@ -713,11 +785,11 @@ def _relay_live(
         fetch = live.http_fetch(vortex_url, os.environ.get("VORTEX_OPERATOR_TOKEN", ""))
         ledger: Any
         if ledger_path:
-            ledger = live.FileLedger(ledger_path)
+            ledger = live.FileLedger(ledger_path, **_owner_kwargs(sign=False))
         else:
             from lestinxor.unisync_supabase import SupabaseLedger
 
-            ledger = SupabaseLedger()
+            ledger = SupabaseLedger(**_owner_kwargs(sign=False))
         stats = live.run(ledger, fetch, interval=interval, max_polls=1 if once else None)
     except ImportError:
         log.error("install `linx[unisync]` to relay")
