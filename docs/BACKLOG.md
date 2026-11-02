@@ -12,6 +12,10 @@ Take the first unchecked item not marked 🔒. One item, one PR.
 - [x] **X12** Nightly self-maintaining loop: `linx nightly plan/work/digest/run`; registry `nightly.agent`/`command`; Windows `LinX-Nightly` daily task + `-RunNightly`.
 - [x] **X10** (Sentinel#134, merged) Active memory stage 2: Sentinel reads the UniSync ledger (Supabase, read-only) and renders facts, links and conflicts as its knowledge graph. PR in Sentinel; LinX exposes `linx memory check --json` as the contract.
 - [x] **X5** `linx status`: one table joining doctor + UniSync (open tasks, pending approvals per system).
+- [x] **X13** Phone digest: `linx notify` + automatic push after `nightly run` via ntfy (`LINX_NTFY_URL`/`_TOKEN`); owner approvals `linx pending/approve/reject`.
+- [x] **X14** Kill switch: `linx halt/resume` (owner-only control scope); nightly refuses, memory loop pauses, status/digest banner.
+- [x] **X15** Nightly retry cap: park after 3 failures + one escalation, `linx nightly retry`; failure feedback to the next attempt.
+- [ ] **X16** Sebastian reads `LINX_FEEDBACK` in `evolve` (PR to Sebastian; `evolve.py` is guarded, so 🔒 owner-approved).
 - [ ] **X6** Neurocore intents → UniSync `task.request` via Hermes, always `requires_approval: true`.
 - [x] **X8** Host the live relay: owner chose the same machine as Vortex. `Register-LinxRelayTask.ps1`, `START_LINX_RELAY.bat`, `scripts/windows/Start-LinxService.ps1`, `relay-live --log-file`, `python -m linx`.
 - [ ] 🔒 **X7** CI workflow (needs owner decision: free Actions minutes only).

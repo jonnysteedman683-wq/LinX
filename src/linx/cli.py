@@ -75,10 +75,35 @@ def _parser() -> argparse.ArgumentParser:
     nw.add_argument("--timeout", type=float, default=3600.0)
     nd = nsub.add_parser("digest", help="markdown morning report")
     nd.add_argument("--out", help="also write the digest to this file")
+    nre = nsub.add_parser("retry", help="owner: reset a parked item's failure count")
+    nre.add_argument("system")
+    nre.add_argument("item")
     nr = nsub.add_parser("run", help="plan, then work every unattended agent once, then digest")
     nr.add_argument("--as", dest="sender", default="lestinxor")
     nr.add_argument("--timeout", type=float, default=3600.0)
     nr.add_argument("--out", help="also write the digest to this file")
+    for name, hlp in (
+        ("halt", "kill switch: stop nightly work and pause the memory loop (owner only)"),
+        ("resume", "lift a halt (owner only)"),
+    ):
+        h = sub.add_parser(name, help=hlp)
+        h.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+        h.add_argument("--reason", default="", required=(name == "halt"))
+    pd = sub.add_parser("pending", help="tasks waiting for the owner's approval")
+    pd.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    for name in ("approve", "reject"):
+        a = sub.add_parser(name, help=f"{name} a pending task, as the owner")
+        a.add_argument("task_id")
+        a.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+        a.add_argument(
+            "--note" if name == "approve" else "--reason",
+            dest="note",
+            default="",
+            required=(name == "reject"),
+        )
+    nt = sub.add_parser("notify", help="push the nightly digest to your phone via ntfy ($LINX_NTFY_URL)")
+    nt.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    nt.add_argument("--date", help="digest day, YYYY-MM-DD (default: today)")
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -140,6 +165,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _memory(args)
     if args.cmd == "nightly":
         return _nightly(reg, args)
+    if args.cmd in ("halt", "resume", "pending", "approve", "reject", "notify"):
+        return _control(args)
     if args.cmd == "relay-live":
         return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
@@ -341,7 +368,13 @@ def _nightly(reg: Registry, args: argparse.Namespace) -> int:
         return 1 if memory.is_transient(exc) else 2
     root = Path(args.root).resolve()
     day = args.date or nightly.today()
+    from linx import control
+
     try:
+        if args.ncmd == "retry":
+            nightly.retry(led, args.system, args.item)
+            print(f"{args.system}/{args.item} will be retried from the next nightly run")
+            return 0
         if args.ncmd in ("plan", "run"):
             posted = nightly.plan(led, reg, root, day=day, sender=args.sender)
             print(f"planned {len(posted)} task(s)" + "".join(f"\n  {t}" for t in posted))
@@ -360,7 +393,77 @@ def _nightly(reg: Registry, args: argparse.Namespace) -> int:
             print(text, end="")
             if args.out:
                 Path(args.out).write_text(text, encoding="utf-8")
+            if args.ncmd == "run":
+                _push_digest(led, text)
+    except control.Halted as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        if args.ncmd == "run":
+            _push_digest(led, nightly.digest(led, day))
+        return 3
     except Exception as exc:  # ProtocolError (role/authority), unreadable ledger
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _push_digest(led: Any, text: str) -> bool:
+    """Send the digest to the phone if LINX_NTFY_URL is set. Never fails the caller."""
+    import os
+
+    from linx import control, notify
+
+    url = os.environ.get("LINX_NTFY_URL", "")
+    if not url:
+        return False
+    view = led.ledger
+    fails = text.count("❌")
+    push = notify.build(
+        text, approvals=len(view.pending_approvals()), failures=fails, halted=bool(control.halt_state(view))
+    )
+    try:
+        notify.send(push, url, os.environ.get("LINX_NTFY_TOKEN", ""))
+    except Exception as exc:  # a failed push must not fail the nightly run
+        print(f"linx: digest push failed: {exc}", file=sys.stderr)
+        return False
+    print(f"pushed digest to phone: {push.title}")
+    return True
+
+
+def _control(args: argparse.Namespace) -> int:
+    from linx import control, nightly
+
+    try:
+        led, _source = _open_ledger(args.ledger)
+    except ImportError:
+        print("linx: install `linx[unisync]`", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"linx: cannot open ledger: {exc}", file=sys.stderr)
+        return 2
+    try:
+        if args.cmd == "halt":
+            control.halt(led, args.reason)
+            print(f"LinX halted: {args.reason}. Nightly stops, memory pauses; `linx resume` lifts it.")
+        elif args.cmd == "resume":
+            control.resume(led, args.reason)
+            print("LinX resumed.")
+        elif args.cmd == "pending":
+            rows = control.pending(led)
+            for tid, title, who in rows:
+                print(f"{tid}  {title}  (from {who})")
+            print(f"{len(rows)} waiting for approval")
+        elif args.cmd in ("approve", "reject"):
+            control.decide(led, args.task_id, args.cmd == "approve", args.note)
+            print(f"{args.task_id}: {'approved' if args.cmd == 'approve' else 'rejected'}")
+        else:  # notify
+            import os
+
+            if not os.environ.get("LINX_NTFY_URL"):
+                print("linx: set LINX_NTFY_URL (e.g. https://ntfy.sh/<long-random-topic>)", file=sys.stderr)
+                return 2
+            text = nightly.digest(led, args.date or nightly.today())
+            return 0 if _push_digest(led, text) else 1
+    except Exception as exc:  # ProtocolError: e.g. approving a task that is not pending
         print(f"linx: {exc}", file=sys.stderr)
         return 2
     return 0

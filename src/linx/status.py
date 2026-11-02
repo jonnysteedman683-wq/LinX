@@ -51,6 +51,7 @@ class FleetStatus:
     approvals: list[Approval] = field(default_factory=list)
     escalations: list[Escalation] = field(default_factory=list)
     vortex: dict[str, int] = field(default_factory=dict)  # Vortex task status -> count
+    halted: str | None = None  # the owner's halt reason while LinX is halted
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -110,7 +111,11 @@ def build(
         if e.kind.value == "escalate"
     ][-escalation_limit:]
     vortex = dict(sorted(Counter(str(v.get("status", "?")) for v in relay.tasks(ledger).values()).items()))
-    return FleetStatus(systems, source, len(entries), ledger.verify(), approvals, escalations, vortex)
+    from linx import control
+
+    halt = control.halt_state(ledger)
+    halted = str(halt.get("reason", "")) if halt else None
+    return FleetStatus(systems, source, len(entries), ledger.verify(), approvals, escalations, vortex, halted)
 
 
 def render(status: FleetStatus) -> str:
@@ -131,6 +136,8 @@ def render(status: FleetStatus) -> str:
     if status.ledger == "none":
         lines.append("\nledger: none (pass --ledger FILE or set UNISYNC_SUPABASE_URL/_KEY)")
         return "\n".join(lines)
+    if status.halted is not None:
+        lines.insert(0, f"⛔ HALTED by jonny: {status.halted}  (linx resume to lift)\n")
     ok = "verified" if status.verified else "CHAIN BROKEN"
     lines.append(f"\nledger: {status.ledger}, {status.entries} entries, {ok}")
     lines.append(f"pending approvals: {len(status.approvals)}")

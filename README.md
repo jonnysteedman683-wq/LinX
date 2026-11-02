@@ -44,6 +44,9 @@ linx status                       # one view: checkouts + UniSync (Supabase if c
 linx selftest                     # read-only PASS/FAIL check of the whole chain on this machine
 linx memory check                 # shared memory: conflicts, stale facts, duplicates, links
 linx nightly run                  # plan backlog tasks, run unattended agents, morning digest
+linx pending / approve T / reject T --reason R   # owner approvals
+linx halt --reason R / linx resume               # kill switch (owner only)
+linx notify                       # push today's digest to your phone (ntfy)
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
 
@@ -63,6 +66,22 @@ Sebastian runs unattended via `evolve --pr`; LESTINXOR-AGENT and HORIZONTAL task
 Claude) to claim. Rules: one nightly task in flight per repo; an item that is open, in flight or done is
 never posted again (a failed one is retried); 🔒 items and lines saying "PR open" are skipped. Agents
 only open PRs: nothing merges, pushes to `main` or approves.
+
+### Owner controls: kill switch, approvals, phone digest
+
+- `linx halt --reason "..."` stops `linx nightly` (plan and work refuse, exit 3) and pauses the memory
+  loop; the relay keeps mirroring. `linx resume` lifts it. Only `jonny`'s own writes to
+  `linx/control/halt` count, so no agent can halt the fleet or lift a halt. The halt shows at the top of
+  `linx status` and the digest. Pausing Vortex agents stays a Vortex operator action.
+- `linx pending`, `linx approve TASK [--note]`, `linx reject TASK --reason` post the owner's decision; the
+  ledger refuses decisions from anyone else and for tasks that are not waiting.
+- Phone digest: set `LINX_NTFY_URL` (e.g. `https://ntfy.sh/<long-random-topic>`; install the ntfy app and
+  subscribe to the same topic) and optionally `LINX_NTFY_TOKEN`. `linx nightly run` then pushes the
+  digest every morning: urgent if halted, high if something failed or waits for approval. `linx notify`
+  pushes on demand. Public ntfy topics are readable by anyone who knows the name: use a long random one.
+- Retry cap: a nightly item that fails 3 times is parked (skipped) and escalated once;
+  `linx nightly retry SYSTEM ITEM` resets it. Earlier failure reasons ride along to the next attempt
+  (`previous_failures` on the task, `{feedback}` in the command, `LINX_FEEDBACK` in its environment).
 
 ### Active memory
 

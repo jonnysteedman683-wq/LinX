@@ -84,7 +84,7 @@ def test_work_runs_command_and_reports_pr(tmp_path: Path) -> None:
     nightly.plan(lg, REG, root, day="d")
     calls: list[tuple[list[str], Path]] = []
 
-    def runner(argv: Sequence[str], cwd: Path, timeout: float) -> tuple[int, str]:
+    def runner(argv: Sequence[str], cwd: Path, timeout: float, env: object = None) -> tuple[int, str]:
         calls.append((list(argv), cwd))
         return 0, "accepted\nhttps://github.com/jonnysteedman683-wq/Sebastian/pull/200\n"
 
@@ -102,7 +102,7 @@ def test_work_runs_command_and_reports_pr(tmp_path: Path) -> None:
 def test_work_reports_failure_with_output_tail(tmp_path: Path) -> None:
     lg, root = ledger(), repos(tmp_path)
     nightly.plan(lg, REG, root, day="d")
-    nightly.work(lg, REG, root, "sebastian", runner=lambda a, c, t: (1, "gate failed: tests red"))
+    nightly.work(lg, REG, root, "sebastian", runner=lambda a, c, t, e=None: (1, "gate failed: tests red"))
     assert lg.status("nightly/d/sebastian/B3") == "failed"
     assert lg.entries[-1].body["reason"] == "exit 1: gate failed: tests red"
 
@@ -117,7 +117,9 @@ def test_real_runner_handles_missing_binary_and_timeout(tmp_path: Path) -> None:
 def test_digest(tmp_path: Path) -> None:
     lg, root = ledger(), repos(tmp_path)
     nightly.plan(lg, REG, root, day="1970-01-01")
-    nightly.work(lg, REG, root, "sebastian", runner=lambda a, c, t: (0, "https://github.com/o/r/pull/7"))
+    nightly.work(
+        lg, REG, root, "sebastian", runner=lambda a, c, t, e=None: (0, "https://github.com/o/r/pull/7")
+    )
     lg.post("o0", Kind.TASK_REQUEST, "T9", title="risky", requires_approval=True)
     lg.post("grok", Kind.ESCALATE, reason="watch this")
     lg.post("sebastian", Kind.MEMORY_WRITE, key="k", value="a")
@@ -137,7 +139,7 @@ def test_cli_nightly_run_and_errors(
 ) -> None:
     root = repos(tmp_path / "repos")
     led = str(tmp_path / "u.jsonl")
-    monkeypatch.setattr(nightly, "_run", lambda a, c, t: (0, "https://github.com/o/r/pull/1"))
+    monkeypatch.setattr(nightly, "_run", lambda a, c, t, e=None: (0, "https://github.com/o/r/pull/1"))
     monkeypatch.setattr(nightly.work, "__kwdefaults__", {"runner": nightly._run, "timeout": 3600.0})
     out = tmp_path / "digest.md"
     base = ["nightly", "--ledger", led, "--root", str(root), "--date", "1970-01-01"]

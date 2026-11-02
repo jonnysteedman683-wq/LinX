@@ -62,7 +62,7 @@ function Show-Status {
     if ($latest) { Write-Host "     latest digest: $($latest.FullName)" }
     Write-Host "[*] Settings (user environment):" -ForegroundColor Cyan
     foreach ($name in "VORTEX_OPERATOR_TOKEN", "UNISYNC_SUPABASE_URL", "UNISYNC_SUPABASE_KEY", "LINX_VORTEX_URL",
-                      "LINX_MEMORY_AGENT", "LINX_MEMORY_EVERY", "LINX_NIGHTLY_AT", "LINX_NIGHTLY_TIMEOUT", "LINX_LEDGER") {
+                      "LINX_MEMORY_AGENT", "LINX_MEMORY_EVERY", "LINX_NIGHTLY_AT", "LINX_NIGHTLY_TIMEOUT", "LINX_NTFY_URL", "LINX_NTFY_TOKEN", "LINX_LEDGER") {
         $set = [bool][Environment]::GetEnvironmentVariable($name, "User")
         Write-Host ("   {0,-22} {1}" -f $name, $(if ($set) { "set" } else { "-" }))
     }
@@ -77,6 +77,8 @@ if ($SetSecrets) {
     Set-UserVar "LINX_MEMORY_AGENT" (Read-Host "Memory agent [coordinator-bot]")
     Set-UserVar "LINX_MEMORY_EVERY" (Read-Host "Memory consolidation interval in seconds [300]")
     Set-UserVar "LINX_NIGHTLY_AT" (Read-Host "Nightly run time HH:MM [02:17]")
+    Set-UserVar "LINX_NTFY_URL" (Read-Host "Phone digest via ntfy: https://ntfy.sh/<long-random-topic> [skip]")
+    Set-UserVar "LINX_NTFY_TOKEN" (Read-Secret "ntfy access token (only for protected topics) [skip]")
     Write-Host "[+] Saved." -ForegroundColor Green
     Show-Status
     exit 0
