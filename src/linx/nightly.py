@@ -22,14 +22,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from linx import control
 from linx.registry import Registry, System
 
 KIND = "nightly"
+MAX_ATTEMPTS = 3  # failures before an item is parked and escalated instead of retried
 ITEM_RE = re.compile(r"^\s*- \[(?P<done>[ xX])\]\s*(?P<lock>🔒\s*)?\*\*(?P<bold>[^*]+)\*\*(?P<rest>.*)$")
 ID_RE = re.compile(r"^(?P<id>[A-Za-z]+\d+[\w-]*|[A-Za-z]+-?\d+[\w-]*)[:.]?\s*(?P<title>.*)$")
 PR_RE = re.compile(r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+")
 
-Runner = Callable[[Sequence[str], Path, float], tuple[int, str]]
+Runner = Callable[..., tuple[int, str]]
 
 
 @dataclass(frozen=True)
@@ -94,6 +96,24 @@ def _attempted(view: Any, system: str) -> set[str]:
     return out
 
 
+def failures(view: Any, system: str, item: str) -> list[str]:
+    """Failure reasons for `system`/`item` since the owner last reset it with `linx nightly retry`."""
+    mark = control.owner_value(view, f"retry:{system}/{item}")
+    since = mark if isinstance(mark, int) else -1
+    tasks = {
+        tid for tid, b in _nightly_tasks(view).items() if b.get("system") == system and b.get("item") == item
+    }
+    return [
+        str(e.body.get("reason", ""))
+        for e in view.entries
+        if e.kind.value == "task.failed" and e.task_id in tasks and e.seq > since
+    ]
+
+
+def parked(view: Any, system: str, items: Sequence[Item], max_attempts: int) -> set[str]:
+    return {it.id for it in items if len(failures(view, system, it.id)) >= max_attempts}
+
+
 IN_FLIGHT = ("open", "claimed", "awaiting_approval", "approved")
 
 
@@ -113,10 +133,21 @@ def plan(
     day: str,
     sender: str = "lestinxor",
     read: Callable[[Path], str] | None = None,
+    max_attempts: int = MAX_ATTEMPTS,
 ) -> list[str]:
-    """Post tonight's tasks. Returns the task ids posted (none twice, however often it runs)."""
+    """Post tonight's tasks. Returns the task ids posted (none twice, however often it runs).
+
+    An item that failed `max_attempts` times (since the owner's last `linx nightly retry`) is parked:
+    it is skipped and escalated once, so a stuck item stops costing a run every night.
+    """
+    control.require_running(ledger)
     view = getattr(ledger, "ledger", ledger)
     read = read or (lambda p: p.read_text(encoding="utf-8"))
+    escalated = {
+        str(e.body.get("nightly_parked"))
+        for e in view.entries
+        if e.kind.value == "escalate" and "nightly_parked" in e.body
+    }
     posted = []
     for s in registry:
         if not s.nightly_agent or _in_flight(view, s.name):
@@ -126,12 +157,25 @@ def plan(
             items = parse_backlog(read(backlog))
         except OSError:
             continue
-        item = next_item(items, _attempted(view, s.name))
+        stuck = parked(view, s.name, items, max_attempts)
+        for item_id in sorted(stuck):
+            ref = f"{s.name}/{item_id}"
+            if ref not in escalated:
+                last = failures(view, s.name, item_id)[-1:]
+                ledger.post(
+                    sender,
+                    "escalate",
+                    nightly_parked=ref,
+                    reason=f"nightly {ref} failed {max_attempts}x and is parked "
+                    f"(`linx nightly retry {s.name} {item_id}` to try again). Last: {last}",
+                )
+        item = next_item(items, _attempted(view, s.name) | stuck)
         if item is None:
             continue
         tid = task_id(day, s.name, item.id)
         if view.status(tid):
             continue
+        earlier = failures(view, s.name, item.id)
         ledger.post(
             sender,
             "task.request",
@@ -143,14 +187,35 @@ def plan(
             item=item.id,
             agent=s.nightly_agent,
             unattended=bool(s.nightly_command),
+            attempt=len(earlier) + 1,
+            previous_failures=earlier[-2:],
         )
         posted.append(tid)
     return posted
 
 
-def _run(argv: Sequence[str], cwd: Path, timeout: float) -> tuple[int, str]:
+def retry(ledger: Any, system: str, item: str) -> None:
+    """Owner resets an item's failure count so the nightly loop tries it again."""
+    view = getattr(ledger, "ledger", ledger)
+    head = view.entries[-1].seq if view.entries else -1
+    ledger.post(control.OWNER, "memory.write", key=f"retry:{system}/{item}", value=head, scope=control.SCOPE)
+
+
+def _run(
+    argv: Sequence[str], cwd: Path, timeout: float, env: dict[str, str] | None = None
+) -> tuple[int, str]:
+    import os
+
     try:
-        p = subprocess.run(list(argv), cwd=cwd, capture_output=True, text=True, timeout=timeout, check=False)
+        p = subprocess.run(
+            list(argv),
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+            env={**os.environ, **(env or {})},
+        )
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except subprocess.TimeoutExpired:
         return 124, f"timed out after {timeout:.0f}s"
@@ -161,7 +226,11 @@ def _run(argv: Sequence[str], cwd: Path, timeout: float) -> tuple[int, str]:
 def work(
     ledger: Any, registry: Registry, root: Path, agent: str, *, runner: Runner = _run, timeout: float = 3600.0
 ) -> str | None:
-    """Claim and run one open nightly task for `agent`. Returns the task id handled, or None."""
+    """Claim and run one open nightly task for `agent`. Returns the task id handled, or None.
+
+    Earlier failure reasons for the item reach the command as `{feedback}` and `LINX_FEEDBACK`.
+    """
+    control.require_running(ledger)
     view = getattr(ledger, "ledger", ledger)
     systems: dict[str, System] = {
         s.name: s for s in registry if s.nightly_agent == agent and s.nightly_command
@@ -172,10 +241,14 @@ def work(
             continue
         ledger.post(agent, "task.claim", tid)
         repo = root / s.repo
+        feedback = " | ".join(str(r) for r in body.get("previous_failures") or [])
         argv = [
-            a.replace("{item}", str(body["item"])).replace("{repo}", str(repo)) for a in s.nightly_command
+            a.replace("{item}", str(body["item"]))
+            .replace("{repo}", str(repo))
+            .replace("{feedback}", feedback)
+            for a in s.nightly_command
         ]
-        code, output = runner(argv, repo, timeout)
+        code, output = runner(argv, repo, timeout, {"LINX_FEEDBACK": feedback} if feedback else None)
         tail = output.strip()[-500:]
         if code == 0:
             pr = PR_RE.findall(output)
@@ -206,12 +279,20 @@ def digest(ledger: Any, day: str, *, memory_report: Any = None) -> str:
         "rejected": "🚫",
     }
     lines = [f"# LinX nightly digest: {day}", ""]
+    state = control.halt_state(view)
+    if state:
+        lines += [
+            f"**⛔ HALTED** by {control.OWNER}: {state.get('reason', '')} (`linx resume` to restart)",
+            "",
+        ]
     if not tasks:
         lines.append("No nightly tasks were planned.")
     for tid, body in sorted(tasks.items()):
         st = view.status(tid)
         who = view.claimant(tid) or body.get("agent", "?")
-        line = f"- {icon.get(st, '•')} **{body.get('system')}** `{body.get('item')}` {st} ({who})"
+        attempt = int(body.get("attempt") or 1)
+        tries = f", attempt {attempt}" if attempt > 1 else ""
+        line = f"- {icon.get(st, '•')} **{body.get('system')}** `{body.get('item')}` {st} ({who}{tries})"
         e = results.get(tid)
         if e is not None:
             line += f": {e.body.get('summary') or e.body.get('reason')}"

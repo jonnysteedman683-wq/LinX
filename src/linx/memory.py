@@ -345,6 +345,14 @@ def run(
             if callable(sync):
                 sync()
             view = getattr(ledger, "ledger", ledger)
+            from linx import control
+
+            if every and control.halt_state(view):
+                log.warning("LinX is halted; skipping this round")
+                if max_rounds is not None and rounds >= max_rounds:
+                    return posted
+                sleep(every)
+                continue
             report = consolidate(view.entries, stale_after=stale_after)
             n = post(ledger, sender, report)
             posted += n
