@@ -61,6 +61,24 @@ def _parser() -> argparse.ArgumentParser:
     mo.add_argument("--stale-after", type=int, default=500)
     mo.add_argument("--every", type=float, help="repeat every N seconds (keeps memory active)")
     mo.add_argument("--log-file", help="append logs here (UTF-8) instead of stderr")
+    ng = sub.add_parser("nightly", help="nightly loop: plan backlog tasks, run unattended agents, digest")
+    ng.add_argument("--ledger", help="UniSync JSONL file (default: Supabase via UNISYNC_SUPABASE_URL/_KEY)")
+    ng.add_argument("--root", default="..", help="folder holding all the repo checkouts (default: ..)")
+    ng.add_argument("--date", help="day to plan/report, YYYY-MM-DD (default: today)")
+    nsub = ng.add_subparsers(dest="ncmd", required=True)
+    npl = nsub.add_parser("plan", help="post one task per repo for its next unlocked backlog item")
+    npl.add_argument(
+        "--as", dest="sender", default="lestinxor", help="orchestrator posting (default lestinxor)"
+    )
+    nw = nsub.add_parser("work", help="claim and run one open task for an agent with an unattended command")
+    nw.add_argument("--as", dest="sender", required=True, help="the worker agent, e.g. sebastian")
+    nw.add_argument("--timeout", type=float, default=3600.0)
+    nd = nsub.add_parser("digest", help="markdown morning report")
+    nd.add_argument("--out", help="also write the digest to this file")
+    nr = nsub.add_parser("run", help="plan, then work every unattended agent once, then digest")
+    nr.add_argument("--as", dest="sender", default="lestinxor")
+    nr.add_argument("--timeout", type=float, default=3600.0)
+    nr.add_argument("--out", help="also write the digest to this file")
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -120,6 +138,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _selftest(reg, Path(args.root).resolve(), args.vortex_url)
     if args.cmd == "memory":
         return _memory(args)
+    if args.cmd == "nightly":
+        return _nightly(reg, args)
     if args.cmd == "relay-live":
         return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
@@ -306,6 +326,44 @@ def _render_memory(report: Any) -> str:
     lines += [f"  duplicate {' = '.join(g)}" for g in report.duplicates]
     lines += [f"  link      {r} -> {', '.join(t)}" for r, t in report.links.items()]
     return "\n".join(lines)
+
+
+def _nightly(reg: Registry, args: argparse.Namespace) -> int:
+    from linx import memory, nightly
+
+    try:
+        led, _source = _open_ledger(args.ledger)
+    except ImportError:
+        print("linx: install `linx[unisync]` to use nightly", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"linx: cannot open ledger: {exc}", file=sys.stderr)
+        return 1 if memory.is_transient(exc) else 2
+    root = Path(args.root).resolve()
+    day = args.date or nightly.today()
+    try:
+        if args.ncmd in ("plan", "run"):
+            posted = nightly.plan(led, reg, root, day=day, sender=args.sender)
+            print(f"planned {len(posted)} task(s)" + "".join(f"\n  {t}" for t in posted))
+        if args.ncmd in ("work", "run"):
+            agents = (
+                [args.sender]
+                if args.ncmd == "work"
+                else sorted({s.nightly_agent for s in reg if s.nightly_agent and s.nightly_command})
+            )
+            for agent in agents:
+                handled = nightly.work(led, reg, root, agent, timeout=args.timeout)
+                print(f"{agent}: " + (f"ran {handled}" if handled else "nothing to do"))
+        if args.ncmd in ("digest", "run"):
+            report = memory.consolidate(led.ledger.entries)
+            text = nightly.digest(led, day, memory_report=report)
+            print(text, end="")
+            if args.out:
+                Path(args.out).write_text(text, encoding="utf-8")
+    except Exception as exc:  # ProtocolError (role/authority), unreadable ledger
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    return 0
 
 
 def _relay_live(

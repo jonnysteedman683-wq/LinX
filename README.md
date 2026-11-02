@@ -43,8 +43,26 @@ linx relay events.json --ledger unisync.jsonl   # mirror a Vortex event feed ont
 linx status                       # one view: checkouts + UniSync (Supabase if configured)
 linx selftest                     # read-only PASS/FAIL check of the whole chain on this machine
 linx memory check                 # shared memory: conflicts, stale facts, duplicates, links
+linx nightly run                  # plan backlog tasks, run unattended agents, morning digest
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
+
+### Nightly loop
+
+Keeps every repo's backlog moving while you sleep; you stay the only one who merges.
+
+```bash
+linx nightly plan                 # lestinxor posts one task per repo: its first unchecked, unlocked backlog item
+linx nightly work --as sebastian  # claims Sebastian's task, runs `sebastian evolve --item <id> --pr`, reports the PR
+linx nightly digest --out d.md    # what landed, what failed, approvals/escalations waiting, memory conflicts
+linx nightly run                  # all three (what the Windows LinX-Nightly task runs daily)
+```
+
+Which agent works which repo is in `systems.json` (`nightly.agent`, optional `nightly.command`):
+Sebastian runs unattended via `evolve --pr`; LESTINXOR-AGENT and HORIZONTAL tasks stay open for Jules (or
+Claude) to claim. Rules: one nightly task in flight per repo; an item that is open, in flight or done is
+never posted again (a failed one is retried); 🔒 items and lines saying "PR open" are skipped. Agents
+only open PRs: nothing merges, pushes to `main` or approves.
 
 ### Active memory
 
@@ -143,7 +161,8 @@ pip install -e ".[unisync]"                 # from the LinX folder, into the pyt
 .\Register-LinxRelayTask.ps1 -SelfTest      # read-only: PASS/FAIL for UniSync, relay, Vortex, Supabase
 .\Register-LinxRelayTask.ps1 -Run           # relay in this window; Ctrl+C when it says "relayed ..."
 .\Register-LinxRelayTask.ps1 -RunMemory     # memory loop in this window; Ctrl+C after the first summary
-.\Register-LinxRelayTask.ps1 -Register      # both start at every logon (Task Scheduler, or Startup folder)
+.\Register-LinxRelayTask.ps1 -RunNightly    # one nightly run now; digest in %LOCALAPPDATA%\LinX\digest-<day>.md
+.\Register-LinxRelayTask.ps1 -Register      # relay + memory at logon; LinX-Nightly daily (LINX_NIGHTLY_AT, default 02:17)
 .\Register-LinxRelayTask.ps1 -Status        # both tasks, last log lines, which settings are set
 ```
 
