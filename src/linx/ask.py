@@ -35,10 +35,31 @@ ALLOWED: dict[str, bool] = {
     "reject": True,
     "halt": True,
     "resume": True,
+    "brief": False,
+    "repos": False,
+    "backlog": False,
+    "log": False,
+    "find": False,
+    "check": False,
+    "task": True,
 }
 OWNER_SUB = {("nightly", "retry"), ("memory", "put"), ("memory", "consolidate")}
 # Commands that read or write the ledger take `--ledger` here (after the command, before any subcommand).
-LEDGER_CMDS = {"status", "memory", "nightly", "halt", "resume", "pending", "approve", "reject", "notify"}
+LEDGER_CMDS = {
+    "status",
+    "memory",
+    "nightly",
+    "halt",
+    "resume",
+    "pending",
+    "approve",
+    "reject",
+    "notify",
+    "brief",
+    "log",
+    "task",
+    "backlog",
+}
 
 EXAMPLES = [
     ("what's going on", ["status"]),
@@ -55,6 +76,14 @@ EXAMPLES = [
     ("any memory conflicts?", ["memory", "check"]),
     ("what is build_cmd", ["memory", "get", "build_cmd"]),
     ("remember goal is ship linx", ["memory", "put", "goal", "ship linx", "--as", "jonny"]),
+    ("good morning", ["brief"]),
+    ("are my repos up to date", ["repos", "--fetch"]),
+    ("update all my repos", ["repos", "--pull"]),
+    ("what's next for horizontal", ["backlog", "horizontal"]),
+    ("what did sebastian do", ["log", "--agent", "sebastian"]),
+    ("where is approval_gate used", ["find", "approval_gate"]),
+    ("test sebastian", ["check", "sebastian"]),
+    ("ask sebastian to fix the flaky eval test", ["task", "fix the flaky eval test", "--for", "sebastian"]),
 ]
 
 
@@ -69,7 +98,8 @@ class Plan:
         if not self.argv:
             return False
         sub = self.argv[1] if len(self.argv) > 1 else ""
-        return ALLOWED.get(self.argv[0], False) or (self.argv[0], sub) in OWNER_SUB
+        pulls = self.argv[0] == "repos" and "--pull" in self.argv  # changes your working trees
+        return ALLOWED.get(self.argv[0], False) or (self.argv[0], sub) in OWNER_SUB or pulls
 
 
 class AskError(ValueError):
@@ -122,6 +152,63 @@ def rule(pattern: str, explain: str) -> Callable[[RuleFn], RuleFn]:
         return fn
 
     return wrap
+
+
+@rule(r"^(?:ask|tell|get|have)\s+(\w+)\s+to\s+(.+)$", "post a task for an agent")
+def _assign(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    agent = m.group(1).lower()
+    if agent in {"me", "you", "it", "linx"}:
+        return None
+    return ["task", m.group(2).strip().rstrip("."), "--for", agent]
+
+
+@rule(r"\b(good morning|morning|brief|briefing|catch me up|sum(mary| up))\b", "morning briefing")
+def _brief(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    return ["brief"]
+
+
+@rule(r"\b(update|pull|sync)\b.*\brepos?\b|\brepos?\b.*\b(update|pull|sync)\b", "fast-forward clean repos")
+def _pull(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    return ["repos", "--pull"]
+
+
+@rule(
+    r"\brepos?\b.*\b(up to date|behind|dirty|state|changes|uncommitted)\b"
+    r"|\b(up to date|behind|dirty|changes|uncommitted)\b.*\brepos?\b|\bgit status\b",
+    "repo git state",
+)
+def _repos(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    return ["repos", "--fetch"] if re.search(r"up to date|behind", t, re.I) else ["repos"]
+
+
+@rule(r"\b(?:what did|what has)\s+([\w-]+)\s+(?:do|done|been doing)\b", "an agent's recent activity")
+def _agent_log(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    return ["log", "--agent", m.group(1).lower()]
+
+
+@rule(r"\b(?:next|backlog|todo|to do)\b(?:.*\b(?:for|in)\s+([\w-]+))?", "backlog overview")
+def _backlog(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    target = m.group(1)
+    return ["backlog", target.lower()] if target else ["backlog"]
+
+
+@rule(r"\b(history|timeline|log|recent activity)\b", "ledger timeline")
+def _log(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    return ["log"]
+
+
+@rule(
+    r"\b(?:where is|find|search for|grep)\s+[\"'`]?([^\"'`?]+?)[\"'`]?(?:\s+(?:used|defined))?\??$",
+    "search the repos",
+)
+def _find(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    return ["find", m.group(1).strip()]
+
+
+@rule(r"^(?:test|run (?:the )?tests (?:for|on|in))\s+([\w-]+)$", "run a system's checks")
+def _check(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    target = m.group(1).lower()
+    return None if target in {"everything", "it", "all", "the", "memory"} else ["check", target]
 
 
 @rule(r"\b(approve|ok|accept)\b", "approve a pending task")
@@ -235,6 +322,8 @@ def _system_prompt(pending: Sequence[tuple[str, str, str]]) -> str:
         "  approve TASK [--note TEXT] | reject TASK --reason TEXT | halt --reason TEXT | resume",
         "  nightly run|plan|digest | nightly work --as AGENT | nightly retry SYSTEM ITEM",
         "  memory check | memory get SCOPE/KEY | memory history SCOPE/KEY | memory put KEY VALUE --as jonny",
+        "  brief | repos [--fetch|--pull] | backlog [SYSTEM] | log [--agent A] [--task T] [--last N]",
+        "  find PATTERN [--system S] | check SYSTEM | task TITLE --for AGENT [--approval]",
         "Examples:",
     ]
     lines += [f'  "{q}" -> {json.dumps(a)}' for q, a in EXAMPLES]

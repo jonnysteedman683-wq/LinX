@@ -48,6 +48,13 @@ linx pending / approve T / reject T --reason R   # owner approvals
 linx halt --reason R / linx resume               # kill switch (owner only)
 linx notify                       # push today's digest to your phone (ntfy)
 linx ask "what's waiting for me"  # plain English -> one LinX command, run after you confirm
+linx brief                        # morning screen: halt, approvals, last night, memory, repos needing attention
+linx repos [--fetch | --pull]     # git state of all 9 repos; --pull fast-forwards clean default-branch repos
+linx backlog [SYSTEM]             # next item + open/locked/done counts + parked items, every backlog
+linx log [--agent A] [--task T]   # readable ledger timeline
+linx find PATTERN [--system S]    # search across every checkout
+linx check SYSTEM                 # run one system's own checks
+linx task "TITLE" --for AGENT     # owner: post a task for an agent ([--approval] to gate it)
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
 
@@ -89,6 +96,12 @@ This is an owner action. Type 'yes' to run it: yes
   commands ask `y/N` (skip with `--yes`); owner actions (approve, reject, halt, resume, retry, memory
   put) need `yes` typed in full, every time. No terminal to answer from means cancelled. `--dry-run`
   only shows the command.
+
+`linx ask` also understands the bigger commands: "good morning" (`brief`), "are my repos up to date"
+(`repos --fetch`), "update all my repos" (`repos --pull`, owner confirm), "what's next for horizontal"
+(`backlog horizontal`), "what did sebastian do" (`log --agent sebastian`), "where is approval_gate used"
+(`find`), "test sebastian" (`check sebastian`), "ask sebastian to fix the flaky eval test" (`task ...
+--for sebastian`, owner confirm).
 
 #### Local model on Windows (Ollama)
 

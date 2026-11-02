@@ -17,6 +17,7 @@ Take the first unchecked item not marked 🔒. One item, one PR.
 - [x] **X15** Nightly retry cap: park after 3 failures + one escalation, `linx nightly retry`; failure feedback to the next attempt.
 - [ ] **X16** Sebastian reads `LINX_FEEDBACK` in `evolve` (PR to Sebastian; `evolve.py` is guarded, so 🔒 owner-approved).
 - [x] **X17** `linx ask`: English -> one allowlisted LinX command (rules, then optional local model via OpenAI-compatible API), parser-validated, always confirmed; owner actions need `yes`.
+- [x] **X20** Bigger commands: `brief`, `repos [--fetch|--pull]` (ff-only, clean, default branch), `backlog`, `log`, `find`, `check`, `task --for`; all understood by `linx ask`.
 - [ ] **X18** `linx ask --explain`: repo expert. Stdlib BM25 index over the 9 repos' READMEs, AGENTS.md, backlogs and docs; answers cite the file; uses the local model when set.
 - [ ] **X19** `linx listen`: push-to-talk voice in (local speech-to-text, optional `linx[voice]` extra), optional spoken reply; Windows first.
 - [ ] **X6** Neurocore intents → UniSync `task.request` via Hermes, always `requires_approval: true`.
