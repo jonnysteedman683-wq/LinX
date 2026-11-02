@@ -47,6 +47,7 @@ linx nightly run                  # plan backlog tasks, run unattended agents, m
 linx pending / approve T / reject T --reason R   # owner approvals
 linx halt --reason R / linx resume               # kill switch (owner only)
 linx notify                       # push today's digest to your phone (ntfy)
+linx ask "what's waiting for me"  # plain English -> one LinX command, run after you confirm
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
 
@@ -66,6 +67,40 @@ Sebastian runs unattended via `evolve --pr`; LESTINXOR-AGENT and HORIZONTAL task
 Claude) to claim. Rules: one nightly task in flight per repo; an item that is open, in flight or done is
 never posted again (a failed one is retried); 🔒 items and lines saying "PR open" are skipped. Agents
 only open PRs: nothing merges, pushes to `main` or approves.
+
+### Plain English: `linx ask`
+
+```text
+> linx ask "what's waiting for me"
+-> linx pending   (list tasks waiting for you; rules)
+Run it? [y/N] y
+> linx ask stop everything, the build is broken
+-> linx halt --reason 'the build is broken'   (halt LinX (kill switch); rules)
+This is an owner action. Type 'yes' to run it: yes
+```
+
+- **Rules first**: status, approvals (`approve the o0 audit` finds the task by its title), halt/resume,
+  nightly run/plan/digest/retry, phone push, selftest, memory check/get/put, doctor, systems. No model
+  needed, works offline.
+- **Local model second** (optional): anything the rules miss goes to an OpenAI-compatible endpoint on this
+  machine. It is shown the command list and must answer with JSON.
+- **Safety**: only allowlisted LinX commands, and LinX's own argument parser must accept them; never a
+  shell, never `linx ask` itself, never `--registry`. You always see the exact command first. Read-only
+  commands ask `y/N` (skip with `--yes`); owner actions (approve, reject, halt, resume, retry, memory
+  put) need `yes` typed in full, every time. No terminal to answer from means cancelled. `--dry-run`
+  only shows the command.
+
+#### Local model on Windows (Ollama)
+
+1. Install Ollama for Windows from https://ollama.com/download and start it (it serves on
+   `127.0.0.1:11434`, including the OpenAI-compatible `/v1` API).
+2. Pull a small instruct model: `ollama pull qwen2.5:3b` (about 2 GB; fine on a laptop with 8 GB+ RAM).
+3. Point LinX at it, once: `setx LINX_LLM_URL http://127.0.0.1:11434/v1` and
+   `setx LINX_LLM_MODEL qwen2.5:3b`, then open a new terminal.
+4. Optional shortcut: add `function ask { linx ask @args }` to your PowerShell `$PROFILE`, then just type
+   `ask what happened overnight`.
+
+Plain http is accepted only for loopback, so the model must run on this machine (or behind https).
 
 ### Owner controls: kill switch, approvals, phone digest
 

@@ -104,6 +104,11 @@ def _parser() -> argparse.ArgumentParser:
     nt = sub.add_parser("notify", help="push the nightly digest to your phone via ntfy ($LINX_NTFY_URL)")
     nt.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
     nt.add_argument("--date", help="digest day, YYYY-MM-DD (default: today)")
+    ak = sub.add_parser("ask", help="plain English -> one LinX command, run after you confirm")
+    ak.add_argument("text", nargs="+", help='e.g. linx ask "what is waiting for me"')
+    ak.add_argument("--ledger", help="UniSync JSONL file passed to the command (default: Supabase)")
+    ak.add_argument("--dry-run", action="store_true", help="show the command, don't run it")
+    ak.add_argument("--yes", action="store_true", help="skip the confirm for read-only commands")
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -167,6 +172,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _nightly(reg, args)
     if args.cmd in ("halt", "resume", "pending", "approve", "reject", "notify"):
         return _control(args)
+    if args.cmd == "ask":
+        return _ask(args)
     if args.cmd == "relay-live":
         return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
@@ -467,6 +474,68 @@ def _control(args: argparse.Namespace) -> int:
         print(f"linx: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def _ask(args: argparse.Namespace, read: Any = None) -> int:
+    import os
+    import shlex
+
+    from linx import ask, control
+
+    text = " ".join(args.text)
+    pending: list[tuple[str, str, str]] = []
+    try:  # task titles let "approve the o0 audit" find its task; optional
+        led, _ = _open_ledger(args.ledger)
+        pending = control.pending(led)
+    except Exception:
+        pass
+
+    def parse(argv: list[str]) -> Any:
+        import contextlib
+        import io
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            return _parser().parse_args(argv)
+
+    try:
+        plan = ask.interpret(
+            text,
+            parse=parse,
+            pending=pending,
+            llm_url=os.environ.get("LINX_LLM_URL", ""),
+            llm_model=os.environ.get("LINX_LLM_MODEL", ""),
+        )
+    except ask.AskError as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # model unreachable, bad reply
+        print(
+            f"linx: the local model failed ({exc}); try a simpler phrase or check LINX_LLM_URL",
+            file=sys.stderr,
+        )
+        return 2
+    argv = ask.with_ledger(plan.argv, args.ledger)
+    print(f"-> linx {shlex.join(argv)}   ({plan.explain}; {plan.source})")
+    if args.dry_run:
+        return 0
+
+    def confirm(prompt: str) -> str:
+        try:
+            return str((read or input)(prompt))
+        except EOFError:  # no terminal to answer from: never run unconfirmed
+            return ""
+
+    if plan.owner_action:
+        answer = confirm("This is an owner action. Type 'yes' to run it: ")
+        if answer.strip().lower() != "yes":
+            print("cancelled")
+            return 1
+    elif not args.yes:
+        answer = confirm("Run it? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("cancelled")
+            return 1
+    return main(argv)
 
 
 def _relay_live(
