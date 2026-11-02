@@ -55,6 +55,7 @@ linx log [--agent A] [--task T]   # readable ledger timeline
 linx find PATTERN [--system S]    # search across every checkout
 linx check SYSTEM                 # run one system's own checks
 linx task "TITLE" --for AGENT     # owner: post a task for an agent ([--approval] to gate it)
+linx explain "how does X work"    # repo expert: answers from the 9 repos + LinX, with file:line sources
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
 
@@ -102,6 +103,29 @@ This is an owner action. Type 'yes' to run it: yes
 (`backlog horizontal`), "what did sebastian do" (`log --agent sebastian`), "where is approval_gate used"
 (`find`), "test sebastian" (`check sebastian`), "ask sebastian to fix the flaky eval test" (`task ...
 --for sebastian`, owner confirm).
+
+### Repo expert: `linx explain`
+
+```text
+> linx explain how does UniSync stop forks in the ledger
+[1] LESTINXOR-AGENT/docs/UNISYNC.md:96-102  (lestinxor)  Shared ledger in Supabase
+    ... seq and prev are unique, so two agents racing on the same head conflict ...
+```
+
+- Questions in `linx ask` ("how does...", "why...", "what does...", "explain...", "tell me about...")
+  route here automatically.
+- A local full-text index (SQLite FTS5 in Python's standard library: BM25 ranking, stemming) covers docs,
+  READMEs, AGENTS/CLAUDE.md, backlogs and source code in all 9 repos plus LinX. It lives in
+  `%LOCALAPPDATA%\LinX\index.sqlite` (or `LINX_INDEX`). The first run indexes everything (about a
+  minute for ~6,000 files); after that each question re-reads only changed files and answers in well under
+  a second. `node_modules`, `.git`, venvs, build output, binaries and files over 300 KB are skipped.
+- Ranking prefers explanations (docs, READMEs) over tests, shows at most two passages per file, and
+  counts identical text once (HORIZONTAL and HORIZONTAL-VAULT share cards).
+- Without a model you get the best passages with `file:line` citations. With `LINX_LLM_URL` set, the
+  local model writes a short answer from those passages only, citing `[n]`, followed by the sources.
+  Repo text goes to the model as quoted data, never as instructions; nothing it says is run. If the
+  model is down you still get the passages. `--system S` narrows to one repo, `-k N` sets passages,
+  `--no-model` skips the model.
 
 #### Local model on Windows (Ollama)
 

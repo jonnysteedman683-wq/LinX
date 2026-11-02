@@ -42,6 +42,7 @@ ALLOWED: dict[str, bool] = {
     "find": False,
     "check": False,
     "task": True,
+    "explain": False,
 }
 OWNER_SUB = {("nightly", "retry"), ("memory", "put"), ("memory", "consolidate")}
 # Commands that read or write the ledger take `--ledger` here (after the command, before any subcommand).
@@ -84,6 +85,7 @@ EXAMPLES = [
     ("where is approval_gate used", ["find", "approval_gate"]),
     ("test sebastian", ["check", "sebastian"]),
     ("ask sebastian to fix the flaky eval test", ["task", "fix the flaky eval test", "--for", "sebastian"]),
+    ("how does sebastian's approval gate work", ["explain", "how does sebastian's approval gate work"]),
 ]
 
 
@@ -152,6 +154,15 @@ def rule(pattern: str, explain: str) -> Callable[[RuleFn], RuleFn]:
         return fn
 
     return wrap
+
+
+@rule(
+    r"^(?:explain\b|why\b|how (?:do|does|did|is|are|can|should|would)\b(?! things)|what (?:does|do)\b"
+    r"|tell me (?:about|how)\b|where (?:does|do)\b)",
+    "answer from the repos (repo expert)",
+)
+def _explain(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    return ["explain", t.rstrip("?")]
 
 
 @rule(r"^(?:ask|tell|get|have)\s+(\w+)\s+to\s+(.+)$", "post a task for an agent")
@@ -324,6 +335,7 @@ def _system_prompt(pending: Sequence[tuple[str, str, str]]) -> str:
         "  memory check | memory get SCOPE/KEY | memory history SCOPE/KEY | memory put KEY VALUE --as jonny",
         "  brief | repos [--fetch|--pull] | backlog [SYSTEM] | log [--agent A] [--task T] [--last N]",
         "  find PATTERN [--system S] | check SYSTEM | task TITLE --for AGENT [--approval]",
+        "  explain QUESTION   (for questions about how the repos work)",
         "Examples:",
     ]
     lines += [f'  "{q}" -> {json.dumps(a)}' for q, a in EXAMPLES]

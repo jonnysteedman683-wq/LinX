@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -140,6 +141,17 @@ def _parser() -> argparse.ArgumentParser:
         "--approval", action="store_true", help="also require your approval before it can be claimed"
     )
     tk.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    ex = sub.add_parser(
+        "explain", help="repo expert: answer a question from the 9 repos, with file citations"
+    )
+    ex.add_argument("question", nargs="+")
+    ex.add_argument("--root", default="..", help="folder holding all the repo checkouts (default: ..)")
+    ex.add_argument("--system", help="only this system")
+    ex.add_argument("-k", type=int, default=6, help="passages to use (default 6)")
+    ex.add_argument(
+        "--index", help="index file (default: $LINX_INDEX or %%LOCALAPPDATA%%\\LinX\\index.sqlite)"
+    )
+    ex.add_argument("--no-model", action="store_true", help="show passages even if LINX_LLM_URL is set")
     ak = sub.add_parser("ask", help="plain English -> one LinX command, run after you confirm")
     ak.add_argument("text", nargs="+", help='e.g. linx ask "what is waiting for me"')
     ak.add_argument("--ledger", help="UniSync JSONL file passed to the command (default: Supabase)")
@@ -210,6 +222,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _control(args)
     if args.cmd == "ask":
         return _ask(args)
+    if args.cmd == "explain":
+        return _explain(reg, args)
     if args.cmd in ("brief", "repos", "backlog", "log", "find", "check", "task"):
         return _ops(reg, args)
     if args.cmd == "relay-live":
@@ -512,6 +526,47 @@ def _control(args: argparse.Namespace) -> int:
         print(f"linx: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def _explain(reg: Registry, args: argparse.Namespace) -> int:
+    import os
+
+    from linx import expert
+
+    question = " ".join(args.question)
+    path = Path(args.index) if args.index else expert.default_index_path()
+    try:
+        db = expert.connect(path)
+    except (RuntimeError, sqlite3.Error) as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    try:
+        fresh = not db.execute("SELECT 1 FROM files LIMIT 1").fetchone()
+        if fresh:
+            print(f"indexing the repos into {path} (first run only)...", file=sys.stderr)
+        stats = expert.update(db, reg, Path(args.root).resolve())
+        if fresh or stats.updated or stats.removed:
+            print(
+                f"index: {stats.files} files, {stats.updated} updated, {stats.removed} removed",
+                file=sys.stderr,
+            )
+        hits = expert.search(db, question, k=args.k, system=args.system)
+    except (RuntimeError, sqlite3.Error) as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        db.close()
+    url = os.environ.get("LINX_LLM_URL", "")
+    if hits and url and not args.no_model:
+        try:
+            print(
+                expert.llm_answer(question, hits, url, os.environ.get("LINX_LLM_MODEL", "") or "qwen2.5:3b")
+            )
+            return 0
+        except Exception as exc:  # model down: still answer from the passages
+            print(f"(local model unavailable: {exc}; showing passages)", file=sys.stderr)
+    print(expert.plain_answer(question, hits))
+    return 0 if hits else 1
 
 
 def _ops(reg: Registry, args: argparse.Namespace) -> int:
