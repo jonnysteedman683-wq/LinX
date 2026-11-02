@@ -47,6 +47,15 @@ linx nightly run                  # plan backlog tasks, run unattended agents, m
 linx pending / approve T / reject T --reason R   # owner approvals
 linx halt --reason R / linx resume               # kill switch (owner only)
 linx notify                       # push today's digest to your phone (ntfy)
+linx ask "what's waiting for me"  # plain English -> one LinX command, run after you confirm
+linx brief                        # morning screen: halt, approvals, last night, memory, repos needing attention
+linx repos [--fetch | --pull]     # git state of all 9 repos; --pull fast-forwards clean default-branch repos
+linx backlog [SYSTEM]             # next item + open/locked/done counts + parked items, every backlog
+linx log [--agent A] [--task T]   # readable ledger timeline
+linx find PATTERN [--system S]    # search across every checkout
+linx check SYSTEM                 # run one system's own checks
+linx task "TITLE" --for AGENT     # owner: post a task for an agent ([--approval] to gate it)
+linx explain "how does X work"    # repo expert: answers from the 9 repos + LinX, with file:line sources
 linx status --ledger unisync.jsonl --json       # same, from a file, machine-readable
 ```
 
@@ -66,6 +75,69 @@ Sebastian runs unattended via `evolve --pr`; LESTINXOR-AGENT and HORIZONTAL task
 Claude) to claim. Rules: one nightly task in flight per repo; an item that is open, in flight or done is
 never posted again (a failed one is retried); 🔒 items and lines saying "PR open" are skipped. Agents
 only open PRs: nothing merges, pushes to `main` or approves.
+
+### Plain English: `linx ask`
+
+```text
+> linx ask "what's waiting for me"
+-> linx pending   (list tasks waiting for you; rules)
+Run it? [y/N] y
+> linx ask stop everything, the build is broken
+-> linx halt --reason 'the build is broken'   (halt LinX (kill switch); rules)
+This is an owner action. Type 'yes' to run it: yes
+```
+
+- **Rules first**: status, approvals (`approve the o0 audit` finds the task by its title), halt/resume,
+  nightly run/plan/digest/retry, phone push, selftest, memory check/get/put, doctor, systems. No model
+  needed, works offline.
+- **Local model second** (optional): anything the rules miss goes to an OpenAI-compatible endpoint on this
+  machine. It is shown the command list and must answer with JSON.
+- **Safety**: only allowlisted LinX commands, and LinX's own argument parser must accept them; never a
+  shell, never `linx ask` itself, never `--registry`. You always see the exact command first. Read-only
+  commands ask `y/N` (skip with `--yes`); owner actions (approve, reject, halt, resume, retry, memory
+  put) need `yes` typed in full, every time. No terminal to answer from means cancelled. `--dry-run`
+  only shows the command.
+
+`linx ask` also understands the bigger commands: "good morning" (`brief`), "are my repos up to date"
+(`repos --fetch`), "update all my repos" (`repos --pull`, owner confirm), "what's next for horizontal"
+(`backlog horizontal`), "what did sebastian do" (`log --agent sebastian`), "where is approval_gate used"
+(`find`), "test sebastian" (`check sebastian`), "ask sebastian to fix the flaky eval test" (`task ...
+--for sebastian`, owner confirm).
+
+### Repo expert: `linx explain`
+
+```text
+> linx explain how does UniSync stop forks in the ledger
+[1] LESTINXOR-AGENT/docs/UNISYNC.md:96-102  (lestinxor)  Shared ledger in Supabase
+    ... seq and prev are unique, so two agents racing on the same head conflict ...
+```
+
+- Questions in `linx ask` ("how does...", "why...", "what does...", "explain...", "tell me about...")
+  route here automatically.
+- A local full-text index (SQLite FTS5 in Python's standard library: BM25 ranking, stemming) covers docs,
+  READMEs, AGENTS/CLAUDE.md, backlogs and source code in all 9 repos plus LinX. It lives in
+  `%LOCALAPPDATA%\LinX\index.sqlite` (or `LINX_INDEX`). The first run indexes everything (about a
+  minute for ~6,000 files); after that each question re-reads only changed files and answers in well under
+  a second. `node_modules`, `.git`, venvs, build output, binaries and files over 300 KB are skipped.
+- Ranking prefers explanations (docs, READMEs) over tests, shows at most two passages per file, and
+  counts identical text once (HORIZONTAL and HORIZONTAL-VAULT share cards).
+- Without a model you get the best passages with `file:line` citations. With `LINX_LLM_URL` set, the
+  local model writes a short answer from those passages only, citing `[n]`, followed by the sources.
+  Repo text goes to the model as quoted data, never as instructions; nothing it says is run. If the
+  model is down you still get the passages. `--system S` narrows to one repo, `-k N` sets passages,
+  `--no-model` skips the model.
+
+#### Local model on Windows (Ollama)
+
+1. Install Ollama for Windows from https://ollama.com/download and start it (it serves on
+   `127.0.0.1:11434`, including the OpenAI-compatible `/v1` API).
+2. Pull a small instruct model: `ollama pull qwen2.5:3b` (about 2 GB; fine on a laptop with 8 GB+ RAM).
+3. Point LinX at it, once: `setx LINX_LLM_URL http://127.0.0.1:11434/v1` and
+   `setx LINX_LLM_MODEL qwen2.5:3b`, then open a new terminal.
+4. Optional shortcut: add `function ask { linx ask @args }` to your PowerShell `$PROFILE`, then just type
+   `ask what happened overnight`.
+
+Plain http is accepted only for loopback, so the model must run on this machine (or behind https).
 
 ### Owner controls: kill switch, approvals, phone digest
 

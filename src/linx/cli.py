@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sqlite3
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -104,6 +105,58 @@ def _parser() -> argparse.ArgumentParser:
     nt = sub.add_parser("notify", help="push the nightly digest to your phone via ntfy ($LINX_NTFY_URL)")
     nt.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
     nt.add_argument("--date", help="digest day, YYYY-MM-DD (default: today)")
+    br = sub.add_parser(
+        "brief", help="morning screen: halt, approvals, last night, memory, repos needing attention"
+    )
+    br.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    br.add_argument("--root", default="..", help="folder holding all the repo checkouts (default: ..)")
+    br.add_argument("--date", help="day, YYYY-MM-DD (default: today)")
+    rp = sub.add_parser("repos", help="git state of every checkout; --fetch, --pull (fast-forward only)")
+    rp.add_argument("--root", default="..")
+    rp.add_argument("--fetch", action="store_true", help="git fetch each repo first")
+    rp.add_argument(
+        "--pull", action="store_true", help="fetch, then fast-forward clean repos on their default branch"
+    )
+    bl = sub.add_parser("backlog", help="next item and counts for every repo's backlog")
+    bl.add_argument("system", nargs="?", help="only this system")
+    bl.add_argument("--root", default="..")
+    bl.add_argument("--ledger", help="UniSync JSONL file, to show parked items (default: Supabase if set)")
+    lg = sub.add_parser("log", help="readable ledger timeline")
+    lg.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    lg.add_argument("--agent", help="only this sender")
+    lg.add_argument("--task", help="only task ids containing this")
+    lg.add_argument("--last", type=int, default=20)
+    fd = sub.add_parser("find", help="search text across every checkout")
+    fd.add_argument("pattern")
+    fd.add_argument("--root", default="..")
+    fd.add_argument("--system", help="only this system")
+    fd.add_argument("--max", type=int, default=50)
+    ck = sub.add_parser("check", help="run one system's own checks (tests, lint)")
+    ck.add_argument("system")
+    ck.add_argument("--root", default="..")
+    tk = sub.add_parser("task", help="owner: post a task for an agent")
+    tk.add_argument("title")
+    tk.add_argument("--for", dest="agent", required=True, help="agent to do it, e.g. sebastian")
+    tk.add_argument(
+        "--approval", action="store_true", help="also require your approval before it can be claimed"
+    )
+    tk.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    ex = sub.add_parser(
+        "explain", help="repo expert: answer a question from the 9 repos, with file citations"
+    )
+    ex.add_argument("question", nargs="+")
+    ex.add_argument("--root", default="..", help="folder holding all the repo checkouts (default: ..)")
+    ex.add_argument("--system", help="only this system")
+    ex.add_argument("-k", type=int, default=6, help="passages to use (default 6)")
+    ex.add_argument(
+        "--index", help="index file (default: $LINX_INDEX or %%LOCALAPPDATA%%\\LinX\\index.sqlite)"
+    )
+    ex.add_argument("--no-model", action="store_true", help="show passages even if LINX_LLM_URL is set")
+    ak = sub.add_parser("ask", help="plain English -> one LinX command, run after you confirm")
+    ak.add_argument("text", nargs="+", help='e.g. linx ask "what is waiting for me"')
+    ak.add_argument("--ledger", help="UniSync JSONL file passed to the command (default: Supabase)")
+    ak.add_argument("--dry-run", action="store_true", help="show the command, don't run it")
+    ak.add_argument("--yes", action="store_true", help="skip the confirm for read-only commands")
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -167,6 +220,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _nightly(reg, args)
     if args.cmd in ("halt", "resume", "pending", "approve", "reject", "notify"):
         return _control(args)
+    if args.cmd == "ask":
+        return _ask(args)
+    if args.cmd == "explain":
+        return _explain(reg, args)
+    if args.cmd in ("brief", "repos", "backlog", "log", "find", "check", "task"):
+        return _ops(reg, args)
     if args.cmd == "relay-live":
         return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
@@ -467,6 +526,173 @@ def _control(args: argparse.Namespace) -> int:
         print(f"linx: {exc}", file=sys.stderr)
         return 2
     return 0
+
+
+def _explain(reg: Registry, args: argparse.Namespace) -> int:
+    import os
+
+    from linx import expert
+
+    question = " ".join(args.question)
+    path = Path(args.index) if args.index else expert.default_index_path()
+    try:
+        db = expert.connect(path)
+    except (RuntimeError, sqlite3.Error) as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    try:
+        fresh = not db.execute("SELECT 1 FROM files LIMIT 1").fetchone()
+        if fresh:
+            print(f"indexing the repos into {path} (first run only)...", file=sys.stderr)
+        stats = expert.update(db, reg, Path(args.root).resolve())
+        if fresh or stats.updated or stats.removed:
+            print(
+                f"index: {stats.files} files, {stats.updated} updated, {stats.removed} removed",
+                file=sys.stderr,
+            )
+        hits = expert.search(db, question, k=args.k, system=args.system)
+    except (RuntimeError, sqlite3.Error) as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        db.close()
+    url = os.environ.get("LINX_LLM_URL", "")
+    if hits and url and not args.no_model:
+        try:
+            print(
+                expert.llm_answer(question, hits, url, os.environ.get("LINX_LLM_MODEL", "") or "qwen2.5:3b")
+            )
+            return 0
+        except Exception as exc:  # model down: still answer from the passages
+            print(f"(local model unavailable: {exc}; showing passages)", file=sys.stderr)
+    print(expert.plain_answer(question, hits))
+    return 0 if hits else 1
+
+
+def _ops(reg: Registry, args: argparse.Namespace) -> int:
+    from linx import nightly, ops
+
+    root = Path(getattr(args, "root", "..")).resolve()
+    if args.cmd == "repos":
+        print(ops.render_repos(ops.repos(reg, root, fetch=args.fetch or args.pull, pull=args.pull)))
+        return 0
+    if args.cmd == "find":
+        hits = ops.find(reg, root, args.pattern, only=args.system, limit=args.max)
+        print("\n".join(hits) if hits else "no matches")
+        return 0 if hits else 1
+    if args.cmd == "check":
+        from linx.doctor import inspect
+
+        try:
+            system = reg.get(args.system)
+        except KeyError:
+            print(f"linx: unknown system {args.system!r} (see `linx systems`)", file=sys.stderr)
+            return 2
+        report = inspect(system, root, run_checks=True)
+        if not report.present:
+            print(f"{system.name}: MISSING under {root}")
+            return 1
+        if report.missing_tools:
+            print(f"{system.name}: missing tools {', '.join(report.missing_tools)}")
+            return 1
+        for argv, code in zip(system.checks, report.check_codes, strict=True):
+            print(f"{'PASS' if code == 0 else 'FAIL'}  {' '.join(argv)}  (exit {code})")
+        return 0 if report.ok else 1
+    ledger: Any = None
+    if args.cmd in ("brief", "log", "task") or getattr(args, "ledger", None):
+        try:
+            led, _source = _open_ledger(args.ledger)
+            ledger = led
+        except Exception as exc:
+            if args.cmd != "backlog":
+                print(f"linx: cannot open ledger: {exc}", file=sys.stderr)
+                return 2
+    elif args.cmd == "backlog":
+        import os
+
+        if os.environ.get("UNISYNC_SUPABASE_URL"):
+            try:
+                ledger, _source = _open_ledger(None)
+            except Exception:
+                ledger = None
+    try:
+        if args.cmd == "brief":
+            print(ops.brief(reg, root, ledger, day=args.date or nightly.today()))
+        elif args.cmd == "backlog":
+            print(ops.backlog(reg, root, ledger, only=args.system))
+        elif args.cmd == "log":
+            print(ops.timeline(ledger, agent=args.agent, task=args.task, last=args.last))
+        else:  # task
+            tid = ops.assign(ledger, args.title, args.agent, approval=args.approval)
+            print(
+                f"posted {tid} for {args.agent}" + (" (needs your approval first)" if args.approval else "")
+            )
+    except Exception as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _ask(args: argparse.Namespace, read: Any = None) -> int:
+    import os
+    import shlex
+
+    from linx import ask, control
+
+    text = " ".join(args.text)
+    pending: list[tuple[str, str, str]] = []
+    try:  # task titles let "approve the o0 audit" find its task; optional
+        led, _ = _open_ledger(args.ledger)
+        pending = control.pending(led)
+    except Exception:
+        pass
+
+    def parse(argv: list[str]) -> Any:
+        import contextlib
+        import io
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            return _parser().parse_args(argv)
+
+    try:
+        plan = ask.interpret(
+            text,
+            parse=parse,
+            pending=pending,
+            llm_url=os.environ.get("LINX_LLM_URL", ""),
+            llm_model=os.environ.get("LINX_LLM_MODEL", ""),
+        )
+    except ask.AskError as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # model unreachable, bad reply
+        print(
+            f"linx: the local model failed ({exc}); try a simpler phrase or check LINX_LLM_URL",
+            file=sys.stderr,
+        )
+        return 2
+    argv = ask.with_ledger(plan.argv, args.ledger)
+    print(f"-> linx {shlex.join(argv)}   ({plan.explain}; {plan.source})")
+    if args.dry_run:
+        return 0
+
+    def confirm(prompt: str) -> str:
+        try:
+            return str((read or input)(prompt))
+        except EOFError:  # no terminal to answer from: never run unconfirmed
+            return ""
+
+    if plan.owner_action:
+        answer = confirm("This is an owner action. Type 'yes' to run it: ")
+        if answer.strip().lower() != "yes":
+            print("cancelled")
+            return 1
+    elif not args.yes:
+        answer = confirm("Run it? [y/N] ")
+        if answer.strip().lower() not in ("y", "yes"):
+            print("cancelled")
+            return 1
+    return main(argv)
 
 
 def _relay_live(

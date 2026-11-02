@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Any
 
 SUMMARY_SCOPE = "linx/memory"
+INTERNAL_SCOPES = (SUMMARY_SCOPE, "linx/control")  # LinX bookkeeping, not shared facts
 CONFLICT_WINDOW = 5  # recent writes per key checked for disagreement
 
 
@@ -113,7 +114,7 @@ def _strings(value: Any) -> Iterable[str]:
 
 
 def consolidate(
-    entries: Iterable[Any], stale_after: int = 500, skip_scopes: tuple[str, ...] = (SUMMARY_SCOPE,)
+    entries: Iterable[Any], stale_after: int = 500, skip_scopes: tuple[str, ...] = INTERNAL_SCOPES
 ) -> Report:
     entries = list(entries)
     head = entries[-1].seq if entries else -1
@@ -171,7 +172,7 @@ def cards(entries: Iterable[Any], report: Report | None = None) -> dict[str, str
     """`{filename: markdown}`: one card per fact plus `000_UniSync_Memory_MOC.md`."""
     entries = list(entries)
     report = report or consolidate(entries)
-    facts = {r: f for r, f in index(entries).items() if f.scope != SUMMARY_SCOPE}
+    facts = {r: f for r, f in index(entries).items() if f.scope not in INTERNAL_SCOPES}
     conflicted = {c.ref for c in report.conflicts}
     stale = set(report.stale)
     dupes = {r: [o for o in g if o != r] for g in report.duplicates for r in g}
