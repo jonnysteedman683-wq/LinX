@@ -39,6 +39,27 @@ def _parser() -> argparse.ArgumentParser:
     sf.add_argument(
         "--vortex-url", help="Vortex root (default: $LINX_VORTEX_URL; token: $VORTEX_OPERATOR_TOKEN)"
     )
+    mem = sub.add_parser("memory", help="shared UniSync memory: read, write, check, consolidate, vault cards")
+    mem.add_argument("--ledger", help="UniSync JSONL file (default: Supabase via UNISYNC_SUPABASE_URL/_KEY)")
+    msub = mem.add_subparsers(dest="mcmd", required=True)
+    mg = msub.add_parser("get", help="current value of scope/key, with author")
+    mg.add_argument("ref", help="scope/key (scope defaults to 'shared' when there is no '/')")
+    mh = msub.add_parser("history", help="every write to scope/key")
+    mh.add_argument("ref")
+    mp = msub.add_parser("put", help="write a fact (value is JSON if it parses, else text)")
+    mp.add_argument("key")
+    mp.add_argument("value")
+    mp.add_argument("--as", dest="sender", required=True, help="the registered agent writing it")
+    mp.add_argument("--scope", default="shared")
+    mc = msub.add_parser("check", help="conflicts, stale facts, duplicates and links (read-only)")
+    mc.add_argument("--stale-after", type=int, default=500, help="ledger entries before a fact is stale")
+    mc.add_argument("--json", action="store_true")
+    mk = msub.add_parser("cards", help="write HORIZONTAL-VAULT cards to a staging folder")
+    mk.add_argument("--out", required=True, help="staging folder (not the live vault)")
+    mo = msub.add_parser("consolidate", help="check, then post the summary and escalate new conflicts")
+    mo.add_argument("--as", dest="sender", required=True, help="agent posting it, e.g. coordinator-bot")
+    mo.add_argument("--stale-after", type=int, default=500)
+    mo.add_argument("--every", type=float, help="repeat every N seconds (keeps memory active)")
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -96,6 +117,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _status(reg, Path(args.root).resolve(), args.ledger, args.json)
     if args.cmd == "selftest":
         return _selftest(reg, Path(args.root).resolve(), args.vortex_url)
+    if args.cmd == "memory":
+        return _memory(args)
     if args.cmd == "relay-live":
         return _relay_live(args.vortex_url, args.ledger, args.interval, args.once, args.log_file)
 
@@ -172,6 +195,108 @@ def _selftest(reg: Registry, root: Path, vortex_url: str | None) -> int:
     )
     print(selftest.render(steps))
     return 1 if any(s.result == selftest.FAIL for s in steps) else 0
+
+
+def _split_ref(ref: str) -> tuple[str, str]:
+    scope, _, key = ref.rpartition("/")
+    return (scope or "shared"), key
+
+
+def _open_ledger(path: str | None) -> tuple[Any, str]:
+    """A postable ledger (`FileLedger` or `SupabaseLedger`, both expose `.ledger`) and its source name."""
+    from linx import live
+
+    if path:
+        return live.FileLedger(path), path
+    from lestinxor.unisync_supabase import SupabaseLedger
+
+    remote = SupabaseLedger()
+    remote.sync()
+    return remote, "supabase"
+
+
+def _memory(args: argparse.Namespace) -> int:
+    import time
+
+    from linx import memory
+
+    try:
+        led, _source = _open_ledger(args.ledger)
+    except ImportError:
+        print("linx: install `linx[unisync]` to use memory", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"linx: cannot open ledger: {exc}", file=sys.stderr)
+        return 2
+    view = led.ledger
+
+    if args.mcmd in ("get", "history"):
+        scope, key = _split_ref(args.ref)
+        fact = memory.index(view.entries).get(f"{scope}/{key}")
+        if fact is None:
+            print(f"linx: no memory at {scope}/{key}", file=sys.stderr)
+            return 1
+        rows = fact.history if args.mcmd == "history" else [fact.current]
+        for w in rows:
+            print(f"#{w.seq} {w.sender}: {json.dumps(w.value, default=str)}")
+        return 0
+
+    if args.mcmd == "put":
+        try:
+            value: Any = json.loads(args.value)
+        except json.JSONDecodeError:
+            value = args.value
+        try:
+            env = led.post(args.sender, "memory.write", key=args.key, value=value, scope=args.scope)
+        except Exception as exc:  # ProtocolError: unknown agent, etc.
+            print(f"linx: {exc}", file=sys.stderr)
+            return 2
+        print(f"#{env.seq} {args.sender} wrote {args.scope}/{args.key}")
+        return 0
+
+    if args.mcmd == "check":
+        report = memory.consolidate(view.entries, stale_after=args.stale_after)
+        print(json.dumps(report.to_dict(), indent=2, default=str) if args.json else _render_memory(report))
+        return 0
+
+    if args.mcmd == "cards":
+        try:
+            paths = memory.write_cards(view.entries, args.out)
+        except ValueError as exc:
+            print(f"linx: {exc}", file=sys.stderr)
+            return 2
+        print(f"wrote {len(paths)} card(s) to {args.out}")
+        return 0
+
+    while True:  # consolidate
+        try:
+            if hasattr(led, "sync"):
+                led.sync()
+            report = memory.consolidate(view.entries, stale_after=args.stale_after)
+            n = memory.post(led, args.sender, report)
+        except Exception as exc:
+            print(f"linx: {exc}", file=sys.stderr)
+            return 2
+        print(_render_memory(report) + f"\nposted {n} envelope(s) as {args.sender}")
+        if not args.every:
+            return 0
+        time.sleep(args.every)
+
+
+def _render_memory(report: Any) -> str:
+    lines = [
+        f"{report.facts} facts at ledger #{report.head}: {len(report.conflicts)} conflicts, "
+        f"{len(report.stale)} stale, {len(report.duplicates)} duplicate groups, {len(report.links)} linked"
+    ]
+    for c in report.conflicts:
+        lines.append(
+            f"  conflict  {c.ref}: "
+            + "; ".join(f"{s}={json.dumps(v, default=str)}" for s, v in c.values.items())
+        )
+    lines += [f"  stale     {r}" for r in report.stale]
+    lines += [f"  duplicate {' = '.join(g)}" for g in report.duplicates]
+    lines += [f"  link      {r} -> {', '.join(t)}" for r, t in report.links.items()]
+    return "\n".join(lines)
 
 
 def _relay_live(
