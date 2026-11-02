@@ -60,6 +60,7 @@ def _parser() -> argparse.ArgumentParser:
     mo.add_argument("--as", dest="sender", required=True, help="agent posting it, e.g. coordinator-bot")
     mo.add_argument("--stale-after", type=int, default=500)
     mo.add_argument("--every", type=float, help="repeat every N seconds (keeps memory active)")
+    mo.add_argument("--log-file", help="append logs here (UTF-8) instead of stderr")
     lv = sub.add_parser("relay-live", help="poll Vortex's /events feed and relay new events continuously")
     lv.add_argument("--vortex-url", required=True, help="Vortex server root (token: $VORTEX_OPERATOR_TOKEN)")
     lv.add_argument("--ledger", help="local JSONL ledger (default: Supabase via $UNISYNC_SUPABASE_URL/_KEY)")
@@ -216,8 +217,6 @@ def _open_ledger(path: str | None) -> tuple[Any, str]:
 
 
 def _memory(args: argparse.Namespace) -> int:
-    import time
-
     from linx import memory
 
     try:
@@ -227,7 +226,7 @@ def _memory(args: argparse.Namespace) -> int:
         return 2
     except Exception as exc:
         print(f"linx: cannot open ledger: {exc}", file=sys.stderr)
-        return 2
+        return 1 if memory.is_transient(exc) else 2  # 1 = retry later, 2 = fix the config
     view = led.ledger
 
     if args.mcmd in ("get", "history"):
@@ -268,19 +267,29 @@ def _memory(args: argparse.Namespace) -> int:
         print(f"wrote {len(paths)} card(s) to {args.out}")
         return 0
 
-    while True:  # consolidate
-        try:
-            if hasattr(led, "sync"):
-                led.sync()
-            report = memory.consolidate(view.entries, stale_after=args.stale_after)
-            n = memory.post(led, args.sender, report)
-        except Exception as exc:
-            print(f"linx: {exc}", file=sys.stderr)
-            return 2
-        print(_render_memory(report) + f"\nposted {n} envelope(s) as {args.sender}")
-        if not args.every:
+    import logging
+
+    fmt = "%(asctime)s %(levelname)s %(message)s"
+    if getattr(args, "log_file", None):
+        logging.basicConfig(
+            level=logging.INFO, format=fmt, filename=args.log_file, encoding="utf-8", force=True
+        )
+    elif args.every:
+        logging.basicConfig(level=logging.INFO, format=fmt)
+    try:
+        if args.every:
+            memory.run(led, args.sender, stale_after=args.stale_after, every=args.every)
             return 0
-        time.sleep(args.every)
+        report = memory.consolidate(led.ledger.entries, stale_after=args.stale_after)
+        n = memory.post(led, args.sender, report)
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:
+        logging.getLogger("linx.memory").error("%s", exc)
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    print(_render_memory(report) + f"\nposted {n} envelope(s) as {args.sender}")
+    return 0
 
 
 def _render_memory(report: Any) -> str:

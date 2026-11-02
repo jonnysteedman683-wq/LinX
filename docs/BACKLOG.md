@@ -8,10 +8,11 @@ Take the first unchecked item not marked 🔒. One item, one PR.
 - [x] **X3b** `linx relay-live`: poll Vortex `/events`, relay to Supabase (or a JSONL file), resume from the ledger cursor, back off on network errors, stop on auth/data errors.
 - [x] **X9** `linx selftest`: read-only PASS/FAIL check (UniSync agents, relay round-trip, checkouts, real Vortex, Supabase chain + agent registration), plus `Register-LinxRelayTask.ps1 -SelfTest`.
 - [x] **X4** Memory bridge + active memory (stage 1 of the layered memory): `linx memory get/history/put/check/consolidate/cards`. Conflicts, stale, duplicates, links; summary + one escalation per conflict, idempotent; HORIZONTAL-VAULT cards to a staging folder.
-- [ ] **X10** Active memory stage 2: Sentinel reads the UniSync ledger (Supabase, read-only) and renders facts, links and conflicts as its knowledge graph. PR in Sentinel; LinX exposes `linx memory check --json` as the contract.
+- [x] **X11** Memory loop at logon: `LinX-Memory` task (`Start-LinxService.ps1 -Service memory`), `-RunMemory`, resilient `memory consolidate --every` (backs off on network/5xx, exits 2 only on config/protocol errors), `--log-file`.
+- [ ] **X10** (PR open: Sentinel#134) Active memory stage 2: Sentinel reads the UniSync ledger (Supabase, read-only) and renders facts, links and conflicts as its knowledge graph. PR in Sentinel; LinX exposes `linx memory check --json` as the contract.
 - [x] **X5** `linx status`: one table joining doctor + UniSync (open tasks, pending approvals per system).
 - [ ] **X6** Neurocore intents → UniSync `task.request` via Hermes, always `requires_approval: true`.
-- [x] **X8** Host the live relay: owner chose the same machine as Vortex. `Register-LinxRelayTask.ps1`, `START_LINX_RELAY.bat`, `scripts/windows/Start-LinxRelay.ps1`, `relay-live --log-file`, `python -m linx`.
+- [x] **X8** Host the live relay: owner chose the same machine as Vortex. `Register-LinxRelayTask.ps1`, `START_LINX_RELAY.bat`, `scripts/windows/Start-LinxService.ps1`, `relay-live --log-file`, `python -m linx`.
 - [ ] 🔒 **X7** CI workflow (needs owner decision: free Actions minutes only).
 
 ## Proposed

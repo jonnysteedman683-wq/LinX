@@ -70,7 +70,8 @@ and escalates each conflict once. Re-running with nothing new posts nothing. `ca
 per fact plus `000_UniSync_Memory_MOC.md`, in HORIZONTAL-VAULT's frontmatter format, with `[[links]]`
 and conflict/stale tags. It refuses a folder that looks like a live vault; HORIZONTAL imports them.
 
-Stage 2 (X10): Sentinel reads the same ledger and shows it as its live knowledge graph.
+Stage 2 (X10): Sentinel reads the same ledger and shows it as its live graph (Mind Map tab,
+`GET /api/unisync/memory`, read-only).
 
 ### Selftest
 
@@ -134,22 +135,27 @@ linx relay-live --vortex-url http://127.0.0.1:8000 --ledger unisync.jsonl --once
 - Plain `http` is accepted only for loopback, matching Vortex's own policy.
 - Run one relay per ledger. `--log-file PATH` appends logs (UTF-8) instead of writing to stderr.
 
-#### On Windows, next to Vortex
+#### On Windows, next to Vortex: relay + memory at every logon
 
 ```powershell
 pip install -e ".[unisync]"                 # from the LinX folder, into the python the task will use
-.\Register-LinxRelayTask.ps1 -SetSecrets    # Vortex operator token, Supabase URL + service-role key (once)
+.\Register-LinxRelayTask.ps1 -SetSecrets    # Vortex token, Supabase URL + key, memory agent/interval (once)
 .\Register-LinxRelayTask.ps1 -SelfTest      # read-only: PASS/FAIL for UniSync, relay, Vortex, Supabase
-.\Register-LinxRelayTask.ps1 -Run           # run in this window; Ctrl+C when it says "relayed ..."
-.\Register-LinxRelayTask.ps1 -Register      # start at every logon (Task Scheduler, or Startup folder without admin)
-.\Register-LinxRelayTask.ps1 -Status        # registered?, which settings are set, last log lines
+.\Register-LinxRelayTask.ps1 -Run           # relay in this window; Ctrl+C when it says "relayed ..."
+.\Register-LinxRelayTask.ps1 -RunMemory     # memory loop in this window; Ctrl+C after the first summary
+.\Register-LinxRelayTask.ps1 -Register      # both start at every logon (Task Scheduler, or Startup folder)
+.\Register-LinxRelayTask.ps1 -Status        # both tasks, last log lines, which settings are set
 ```
 
-`START_LINX_RELAY.bat` runs it in a console window. Logs: `%LOCALAPPDATA%\LinX\relay.log`.
-`scripts/windows/Start-LinxRelay.ps1` restarts the relay if it crashes (10 s, doubling to 10 min) but
-stops on exit code 2 (bad token, URL or data), so a wrong setting never hammers Vortex. Secrets are
-user environment variables, never files in the repo. Optional: `LINX_VORTEX_URL` (default
-`http://127.0.0.1:8000`), `LINX_LEDGER` (local JSONL instead of Supabase), `LINX_PYTHON`.
+Two logon tasks run `scripts/windows/Start-LinxService.ps1`: `LinX-Relay` (`-Service relay`) and
+`LinX-Memory` (`-Service memory`, i.e. `linx memory consolidate --every`). Logs:
+`%LOCALAPPDATA%\LinX\relay.log` and `memory.log`. Each supervisor restarts its loop after a crash
+(10 s, doubling to 10 min) but stops on exit code 2 (bad token, URL, unknown agent or bad data), so
+a wrong setting never hammers anything. Inside the memory loop, network errors and 5xx/429 back off
+and retry without exiting. Secrets are user environment variables, never files in the repo.
+Optional: `LINX_VORTEX_URL` (default `http://127.0.0.1:8000`), `LINX_MEMORY_AGENT` (default
+`coordinator-bot`), `LINX_MEMORY_EVERY` (default 300 s), `LINX_LEDGER` (local JSONL instead of
+Supabase), `LINX_PYTHON`. `START_LINX_RELAY.bat` runs the relay in a console window.
 
 ## Checks
 

@@ -1,18 +1,21 @@
-# LinX live relay - Windows logon persistence (same pattern as HORIZONTAL's Register-CitadelScheduledTask.ps1)
+# LinX - Windows logon persistence for the relay and memory loops
+# (same pattern as HORIZONTAL's Register-CitadelScheduledTask.ps1)
 param(
     [switch]$SetSecrets,
     [switch]$Register,
     [switch]$Unregister,
     [switch]$Status,
     [switch]$Run,
+    [switch]$RunMemory,
     [switch]$SelfTest
 )
 
-$TaskName = "LinX-Relay"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$ServiceScript = Join-Path $RepoRoot "scripts\windows\Start-LinxRelay.ps1"
-$LogFile = Join-Path $env:LOCALAPPDATA "LinX\relay.log"
-$StartupLauncher = Join-Path ([Environment]::GetFolderPath("Startup")) "LinX-Relay.cmd"
+$ServiceScript = Join-Path $RepoRoot "scripts\windows\Start-LinxService.ps1"
+$LogDir = Join-Path $env:LOCALAPPDATA "LinX"
+$StartupDir = [Environment]::GetFolderPath("Startup")
+# One logon task per loop: name -> service
+$Services = [ordered]@{ "LinX-Relay" = "relay"; "LinX-Memory" = "memory" }
 
 function Read-Secret([string]$Prompt) {
     $secure = Read-Host -Prompt $Prompt -AsSecureString
@@ -25,23 +28,32 @@ function Set-UserVar([string]$Name, [string]$Value) {
     if ($Value) { [Environment]::SetEnvironmentVariable($Name, $Value, "User") }
 }
 
+function Get-Action([string]$Service) {
+    return "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ServiceScript`" -Service $Service"
+}
+
 function Show-Status {
-    Write-Host "[*] LinX relay persistence for [$TaskName]:" -ForegroundColor Cyan
-    schtasks /Query /TN $TaskName /FO LIST 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[+] Scheduled Task is REGISTERED." -ForegroundColor Green
-    } elseif (Test-Path $StartupLauncher) {
-        Write-Host "[+] Startup-folder launcher is ACTIVE: $StartupLauncher" -ForegroundColor Green
-    } else {
-        Write-Host "[!] Not registered. Run .\Register-LinxRelayTask.ps1 -Register" -ForegroundColor Yellow
+    foreach ($task in $Services.Keys) {
+        $service = $Services[$task]
+        $launcher = Join-Path $StartupDir "$task.cmd"
+        schtasks /Query /TN $task /FO LIST 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[+] $task is REGISTERED (Task Scheduler)." -ForegroundColor Green
+        } elseif (Test-Path $launcher) {
+            Write-Host "[+] $task is ACTIVE via Startup folder: $launcher" -ForegroundColor Green
+        } else {
+            Write-Host "[!] $task is not registered. Run .\Register-LinxRelayTask.ps1 -Register" -ForegroundColor Yellow
+        }
+        $log = Join-Path $LogDir "$service.log"
+        if (Test-Path $log) {
+            Get-Content $log -Tail 3 | ForEach-Object { Write-Host "     $_" }
+        }
     }
-    foreach ($name in "VORTEX_OPERATOR_TOKEN", "UNISYNC_SUPABASE_URL", "UNISYNC_SUPABASE_KEY", "LINX_VORTEX_URL", "LINX_LEDGER") {
+    Write-Host "[*] Settings (user environment):" -ForegroundColor Cyan
+    foreach ($name in "VORTEX_OPERATOR_TOKEN", "UNISYNC_SUPABASE_URL", "UNISYNC_SUPABASE_KEY", "LINX_VORTEX_URL",
+                      "LINX_MEMORY_AGENT", "LINX_MEMORY_EVERY", "LINX_LEDGER") {
         $set = [bool][Environment]::GetEnvironmentVariable($name, "User")
         Write-Host ("   {0,-22} {1}" -f $name, $(if ($set) { "set" } else { "-" }))
-    }
-    if (Test-Path $LogFile) {
-        Write-Host "[*] Last log lines ($LogFile):" -ForegroundColor Cyan
-        Get-Content $LogFile -Tail 5 | ForEach-Object { Write-Host "   $_" }
     }
 }
 
@@ -51,28 +63,36 @@ if ($SetSecrets) {
     Set-UserVar "UNISYNC_SUPABASE_URL" (Read-Host "Supabase URL (https://<ref>.supabase.co)")
     Set-UserVar "UNISYNC_SUPABASE_KEY" (Read-Secret "Supabase service-role key")
     Set-UserVar "LINX_VORTEX_URL" (Read-Host "Vortex URL [http://127.0.0.1:8000]")
+    Set-UserVar "LINX_MEMORY_AGENT" (Read-Host "Memory agent [coordinator-bot]")
+    Set-UserVar "LINX_MEMORY_EVERY" (Read-Host "Memory consolidation interval in seconds [300]")
     Write-Host "[+] Saved." -ForegroundColor Green
     Show-Status
     exit 0
 }
 
 if ($Unregister) {
-    schtasks /Delete /TN $TaskName /F 2>&1 | Out-Null
-    if (Test-Path $StartupLauncher) { Remove-Item $StartupLauncher -Force }
-    Write-Host "[+] Unregistered [$TaskName]." -ForegroundColor Green
+    foreach ($task in $Services.Keys) {
+        schtasks /Delete /TN $task /F 2>&1 | Out-Null
+        $launcher = Join-Path $StartupDir "$task.cmd"
+        if (Test-Path $launcher) { Remove-Item $launcher -Force }
+    }
+    # Older installs used a single LinX-Relay launcher; already covered by the loop above.
+    Write-Host "[+] Unregistered LinX-Relay and LinX-Memory." -ForegroundColor Green
     exit 0
 }
 
 if ($Register) {
-    $action = "powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ServiceScript`""
-    schtasks /Create /TN $TaskName /TR $action /SC ONLOGON /F 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "[+] Registered [$TaskName] in Task Scheduler (runs at logon)." -ForegroundColor Green
-    } else {
-        Write-Host "[!] Task Scheduler needs elevation. Using the Startup folder instead." -ForegroundColor Yellow
-        $cmd = "@echo off`r`nstart `"`" powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ServiceScript`"`r`n"
-        Set-Content -Path $StartupLauncher -Value $cmd -Encoding ASCII
-        Write-Host "[+] Created $StartupLauncher" -ForegroundColor Green
+    foreach ($task in $Services.Keys) {
+        $action = Get-Action $Services[$task]
+        schtasks /Create /TN $task /TR $action /SC ONLOGON /F 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[+] Registered [$task] in Task Scheduler (runs at logon)." -ForegroundColor Green
+        } else {
+            $launcher = Join-Path $StartupDir "$task.cmd"
+            $cmd = "@echo off`r`nstart `"`" $action`r`n"
+            Set-Content -Path $launcher -Value $cmd -Encoding ASCII
+            Write-Host "[!] Task Scheduler needs elevation; created Startup launcher $launcher" -ForegroundColor Yellow
+        }
     }
     Show-Status
     exit 0
@@ -94,15 +114,21 @@ if ($SelfTest) {
 }
 
 if ($Run) {
-    & powershell.exe -ExecutionPolicy Bypass -File "$ServiceScript" -Foreground
+    & powershell.exe -ExecutionPolicy Bypass -File "$ServiceScript" -Service relay -Foreground
+    exit $LASTEXITCODE
+}
+
+if ($RunMemory) {
+    & powershell.exe -ExecutionPolicy Bypass -File "$ServiceScript" -Service memory -Foreground
     exit $LASTEXITCODE
 }
 
 Show-Status
 Write-Host "`nUsage:" -ForegroundColor DarkGray
-Write-Host "  .\Register-LinxRelayTask.ps1 -SetSecrets   # store token, Supabase URL/key (once)" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -SetSecrets   # store token, Supabase URL/key, memory agent (once)" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -SelfTest     # read-only check: UniSync, relay, Vortex, Supabase" -ForegroundColor DarkGray
-Write-Host "  .\Register-LinxRelayTask.ps1 -Run          # run in this window to check it works" -ForegroundColor DarkGray
-Write-Host "  .\Register-LinxRelayTask.ps1 -Register     # start at every logon" -ForegroundColor DarkGray
-Write-Host "  .\Register-LinxRelayTask.ps1 -Unregister   # remove" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -Run          # run the relay in this window" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -RunMemory    # run the memory loop in this window" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -Register     # start both at every logon" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -Unregister   # remove both" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -Status       # persistence, settings, last log lines" -ForegroundColor DarkGray

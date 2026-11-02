@@ -145,3 +145,66 @@ def test_cli_memory_round_trip(tmp_path: Path, capsys: pytest.CaptureFixture[str
     assert main([*base, "consolidate", "--as", "coordinator-bot"]) == 0
     assert "posted 0 envelope(s)" in capsys.readouterr().out
     assert Ledger.from_jsonl(Path(led).read_text()).verify()
+
+
+class FlakyLedger:
+    """Wraps a Ledger; sync() raises the scripted errors first."""
+
+    def __init__(self, ledger: Ledger, errors: list[Exception]) -> None:
+        self.ledger, self.errors = ledger, list(errors)
+
+    def sync(self) -> int:
+        if self.errors:
+            raise self.errors.pop(0)
+        return 0
+
+    def post(self, *a: Any, **k: Any) -> Any:
+        return self.ledger.post(*a, **k)
+
+
+def test_is_transient_classifies_errors() -> None:
+    import urllib.error
+
+    assert memory.is_transient(urllib.error.URLError("down"))
+    assert memory.is_transient(TimeoutError())
+    assert memory.is_transient(urllib.error.HTTPError("u", 503, "x", {}, None))  # type: ignore[arg-type]
+    assert memory.is_transient(urllib.error.HTTPError("u", 429, "x", {}, None))  # type: ignore[arg-type]
+    assert not memory.is_transient(urllib.error.HTTPError("u", 401, "x", {}, None))  # type: ignore[arg-type]
+    assert not memory.is_transient(ValueError("bad config"))
+
+
+def test_run_retries_transient_errors_with_backoff() -> None:
+    import urllib.error
+
+    lg = scenario()
+    flaky = FlakyLedger(lg, [urllib.error.URLError("down"), TimeoutError()])
+    sleeps: list[float] = []
+    posted = memory.run(flaky, "coordinator-bot", every=10, max_rounds=4, max_backoff=25, sleep=sleeps.append)
+    assert posted == 2  # escalation + summary, once
+    assert sleeps == [20, 25, 10]  # backoff doubles from `every`, capped, then back to `every`
+    assert lg.verify()
+
+
+def test_run_raises_on_non_transient_and_once_mode_has_no_retry() -> None:
+    import urllib.error
+
+    lg = scenario()
+    with pytest.raises(ValueError):
+        memory.run(FlakyLedger(lg, [ValueError("config")]), "coordinator-bot", every=5, sleep=lambda s: None)
+    with pytest.raises(urllib.error.URLError):
+        memory.run(FlakyLedger(lg, [urllib.error.URLError("down")]), "coordinator-bot")
+    assert memory.run(lg, "coordinator-bot") == 2
+
+
+def test_cli_consolidate_log_file(tmp_path: Path) -> None:
+    led = str(tmp_path / "u.jsonl")
+    assert main(["memory", "--ledger", led, "put", "k", "a", "--as", "sebastian"]) == 0
+    assert main(["memory", "--ledger", led, "put", "k", "b", "--as", "horizontal"]) == 0
+    logf = tmp_path / "memory.log"
+    assert (
+        main(["memory", "--ledger", led, "consolidate", "--as", "coordinator-bot", "--log-file", str(logf)])
+        == 0
+    )
+    assert main(["memory", "--ledger", led, "put", "k", "c", "--as", "neurocore"]) == 0  # conflict changes
+    assert main(["memory", "--ledger", led, "consolidate", "--as", "mallory", "--log-file", str(logf)]) == 2
+    assert "ERROR" in logf.read_text(encoding="utf-8")
