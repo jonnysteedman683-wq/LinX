@@ -26,6 +26,10 @@ class System:
     does: str
     role: str | None = None
     checks: tuple[tuple[str, ...], ...] = field(default_factory=tuple)
+    # Nightly loop: which agent works this repo's backlog, and (optionally) the unattended command
+    # LinX runs for it. Placeholders: {item} (backlog id), {repo} (checkout path).
+    nightly_agent: str | None = None
+    nightly_command: tuple[str, ...] = ()
 
     def slug(self, owner: str) -> str:
         return f"{owner}/{self.repo}"
@@ -43,6 +47,17 @@ class System:
         checks = raw.get("checks", [])
         if not all(isinstance(c, list) and c and all(isinstance(a, str) for a in c) for c in checks):
             raise RegistryError(f"{raw['name']}: each check must be a non-empty argv list")
+        nightly = raw.get("nightly") or {}
+        if not isinstance(nightly, Mapping):
+            raise RegistryError(f"{raw['name']}: nightly must be an object")
+        agent = nightly.get("agent")
+        command = nightly.get("command", [])
+        if agent is not None and (not isinstance(agent, str) or not agent):
+            raise RegistryError(f"{raw['name']}: nightly.agent must be a non-empty string")
+        if not isinstance(command, list) or not all(isinstance(a, str) for a in command):
+            raise RegistryError(f"{raw['name']}: nightly.command must be an argv list")
+        if command and agent is None:
+            raise RegistryError(f"{raw['name']}: nightly.command needs nightly.agent")
         return cls(
             raw["name"],
             raw["repo"],
@@ -51,6 +66,8 @@ class System:
             raw["does"],
             role,
             tuple(tuple(c) for c in checks),
+            agent,
+            tuple(command),
         )
 
 

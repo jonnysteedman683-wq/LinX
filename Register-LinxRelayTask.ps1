@@ -7,6 +7,7 @@ param(
     [switch]$Status,
     [switch]$Run,
     [switch]$RunMemory,
+    [switch]$RunNightly,
     [switch]$SelfTest
 )
 
@@ -14,8 +15,9 @@ $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ServiceScript = Join-Path $RepoRoot "scripts\windows\Start-LinxService.ps1"
 $LogDir = Join-Path $env:LOCALAPPDATA "LinX"
 $StartupDir = [Environment]::GetFolderPath("Startup")
-# One logon task per loop: name -> service
+# One logon task per loop: name -> service. LinX-Nightly is a daily one-shot (see $NightlyTask).
 $Services = [ordered]@{ "LinX-Relay" = "relay"; "LinX-Memory" = "memory" }
+$NightlyTask = "LinX-Nightly"
 
 function Read-Secret([string]$Prompt) {
     $secure = Read-Host -Prompt $Prompt -AsSecureString
@@ -49,9 +51,18 @@ function Show-Status {
             Get-Content $log -Tail 3 | ForEach-Object { Write-Host "     $_" }
         }
     }
+    schtasks /Query /TN $NightlyTask /FO LIST 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[+] $NightlyTask is REGISTERED (daily)." -ForegroundColor Green
+    } else {
+        Write-Host "[!] $NightlyTask is not registered (needs Task Scheduler; run -Register)." -ForegroundColor Yellow
+    }
+    $latest = Get-ChildItem -Path $LogDir -Filter "digest-*.md" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if ($latest) { Write-Host "     latest digest: $($latest.FullName)" }
     Write-Host "[*] Settings (user environment):" -ForegroundColor Cyan
     foreach ($name in "VORTEX_OPERATOR_TOKEN", "UNISYNC_SUPABASE_URL", "UNISYNC_SUPABASE_KEY", "LINX_VORTEX_URL",
-                      "LINX_MEMORY_AGENT", "LINX_MEMORY_EVERY", "LINX_LEDGER") {
+                      "LINX_MEMORY_AGENT", "LINX_MEMORY_EVERY", "LINX_NIGHTLY_AT", "LINX_NIGHTLY_TIMEOUT", "LINX_LEDGER") {
         $set = [bool][Environment]::GetEnvironmentVariable($name, "User")
         Write-Host ("   {0,-22} {1}" -f $name, $(if ($set) { "set" } else { "-" }))
     }
@@ -65,6 +76,7 @@ if ($SetSecrets) {
     Set-UserVar "LINX_VORTEX_URL" (Read-Host "Vortex URL [http://127.0.0.1:8000]")
     Set-UserVar "LINX_MEMORY_AGENT" (Read-Host "Memory agent [coordinator-bot]")
     Set-UserVar "LINX_MEMORY_EVERY" (Read-Host "Memory consolidation interval in seconds [300]")
+    Set-UserVar "LINX_NIGHTLY_AT" (Read-Host "Nightly run time HH:MM [02:17]")
     Write-Host "[+] Saved." -ForegroundColor Green
     Show-Status
     exit 0
@@ -76,8 +88,8 @@ if ($Unregister) {
         $launcher = Join-Path $StartupDir "$task.cmd"
         if (Test-Path $launcher) { Remove-Item $launcher -Force }
     }
-    # Older installs used a single LinX-Relay launcher; already covered by the loop above.
-    Write-Host "[+] Unregistered LinX-Relay and LinX-Memory." -ForegroundColor Green
+    schtasks /Delete /TN $NightlyTask /F 2>&1 | Out-Null
+    Write-Host "[+] Unregistered LinX-Relay, LinX-Memory and LinX-Nightly." -ForegroundColor Green
     exit 0
 }
 
@@ -93,6 +105,14 @@ if ($Register) {
             Set-Content -Path $launcher -Value $cmd -Encoding ASCII
             Write-Host "[!] Task Scheduler needs elevation; created Startup launcher $launcher" -ForegroundColor Yellow
         }
+    }
+    $at = [Environment]::GetEnvironmentVariable("LINX_NIGHTLY_AT", "User")
+    if (-not $at) { $at = "02:17" }
+    schtasks /Create /TN $NightlyTask /TR (Get-Action "nightly") /SC DAILY /ST $at /F 2>&1 | Out-Null
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "[+] Registered [$NightlyTask] daily at $at." -ForegroundColor Green
+    } else {
+        Write-Host "[!] Could not register [$NightlyTask]: daily tasks need Task Scheduler (try an elevated shell)." -ForegroundColor Yellow
     }
     Show-Status
     exit 0
@@ -123,12 +143,18 @@ if ($RunMemory) {
     exit $LASTEXITCODE
 }
 
+if ($RunNightly) {
+    & powershell.exe -ExecutionPolicy Bypass -File "$ServiceScript" -Service nightly -Foreground
+    exit $LASTEXITCODE
+}
+
 Show-Status
 Write-Host "`nUsage:" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -SetSecrets   # store token, Supabase URL/key, memory agent (once)" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -SelfTest     # read-only check: UniSync, relay, Vortex, Supabase" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -Run          # run the relay in this window" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -RunMemory    # run the memory loop in this window" -ForegroundColor DarkGray
-Write-Host "  .\Register-LinxRelayTask.ps1 -Register     # start both at every logon" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -RunNightly   # one nightly run now (plan, agents, digest)" -ForegroundColor DarkGray
+Write-Host "  .\Register-LinxRelayTask.ps1 -Register     # relay + memory at logon, nightly daily" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -Unregister   # remove both" -ForegroundColor DarkGray
 Write-Host "  .\Register-LinxRelayTask.ps1 -Status       # persistence, settings, last log lines" -ForegroundColor DarkGray
