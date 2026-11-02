@@ -128,14 +128,17 @@ def run(
 class FileLedger:
     """A local UniSync ledger in a JSONL file: replayed (and verified) on open, appended line by line."""
 
-    def __init__(self, path: Any) -> None:
+    def __init__(
+        self, path: Any, *, owner_root: str | None = None, owner_from: int = 0, signer: Any = None
+    ) -> None:
         from pathlib import Path
 
         from lestinxor.unisync import Ledger
 
         self.path = Path(path)
         text = self.path.read_text(encoding="utf-8") if self.path.exists() else ""
-        self.ledger = Ledger.from_jsonl(text)
+        self.ledger = Ledger.from_jsonl(text, owner_root=owner_root, owner_from=owner_from)
+        self.ledger.signer = signer
 
     def post(self, sender: str, kind: str, task_id: str = "", **body: Any) -> Any:
         env = self.ledger.post(sender, kind, task_id, **body)

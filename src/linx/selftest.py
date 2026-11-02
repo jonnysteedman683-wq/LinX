@@ -124,6 +124,40 @@ def check_checkouts(registry: Registry, root: Path) -> Step:
     return Step("checkouts", INFO, detail)
 
 
+def check_owner(registry: Registry) -> Step:
+    from linx import owner
+
+    root, start = owner.pinned(registry)
+    path = owner.seed_path()
+    if not root:
+        return Step(
+            "owner",
+            INFO,
+            "no owner key pinned: approvals and halts are checked by name only "
+            "(`linx owner init`, then `linx owner pin`)",
+        )
+    if not path.exists():
+        return Step(
+            "owner",
+            INFO,
+            f"key {root[:12]}... enforced from #{start}; this machine has no seed (cannot sign)",
+        )
+    try:
+        mine = owner.load_key(path).root
+    except (OSError, ValueError) as exc:
+        return Step(
+            "owner", FAIL, f"seed at {path} is unreadable: {exc}", "restore the seed from your backup"
+        )
+    if mine != root:
+        return Step(
+            "owner",
+            FAIL,
+            f"seed at {path} does not match the pinned key {root[:12]}...",
+            "restore the right seed, or pin this one with `linx owner pin`",
+        )
+    return Step("owner", PASS, f"key {root[:12]}... enforced from #{start}; this machine can sign")
+
+
 def check_vortex(url: str, token: str, fetch_factory: Callable[[str, str], Any] | None = None) -> Step:
     if not url or not token:
         return Step("vortex", SKIP, "set LINX_VORTEX_URL (or --vortex-url) and VORTEX_OPERATOR_TOKEN to test")
@@ -171,7 +205,9 @@ def check_supabase(
         if ledger_factory is None:
             from lestinxor.unisync_supabase import SupabaseLedger
 
-            remote = SupabaseLedger(url, key)
+            from linx import owner
+
+            remote = SupabaseLedger(url, key, **owner.ledger_kwargs(registry, sign=False))
         else:
             remote = ledger_factory()
         remote.sync()
@@ -209,6 +245,7 @@ def run(
         check_unisync(registry),
         check_relay(registry, root),
         check_checkouts(registry, root),
+        check_owner(registry),
         check_vortex(vortex_url, token),
         check_supabase(registry, supabase_url, supabase_key),
     ]
