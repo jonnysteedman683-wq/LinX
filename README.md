@@ -319,4 +319,9 @@ Supabase), `LINX_PYTHON`. `START_LINX_RELAY.bat` runs the relay in a console win
 python -m ruff check . && python -m ruff format --check . && python -m mypy && python -m pytest --cov=linx
 ```
 
+`tests/test_chaos.py` holds seeded chaos and fuzz tests. They damage backups, anchor logs, Vortex
+feeds and model replies, and run concurrent Supabase writers and the live relay under injected
+409s, 503s, timeouts and lost responses. A failure prints its seed so you can replay it. For a deeper
+run, set `LINX_FUZZ_ITERS=5000 python -m pytest tests/test_chaos.py`.
+
 Rules for agents working here: [`AGENTS.md`](AGENTS.md). Roadmap: [`docs/BACKLOG.md`](docs/BACKLOG.md).

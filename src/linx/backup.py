@@ -73,8 +73,12 @@ def load_anchors(path: Path | None = None) -> list[Anchor]:
     path = path or anchors_path()
     if not path.exists():
         return []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise BackupError(f"{path} is not UTF-8 text: {exc}") from exc
     out = []
-    for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for n, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
@@ -192,21 +196,27 @@ def verify(path: Path, **owner_kwargs: Any) -> Any:
     meta_path = path.with_suffix(".json")
     if not path.exists():
         raise BackupError(f"no backup at {path}")
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise BackupError(f"{path} is not UTF-8 text") from exc
     manifest: dict[str, Any] | None = None
     if meta_path.exists():
         try:
             manifest = json.loads(meta_path.read_text(encoding="utf-8"))
         except ValueError as exc:
             raise BackupError(f"manifest {meta_path} is not JSON") from exc
+        if not isinstance(manifest, dict):
+            raise BackupError(f"manifest {meta_path} is not a JSON object")
         if manifest.get("format") != FORMAT:
             raise BackupError(f"unknown backup format {manifest.get('format')!r}")
         if hashlib.sha256(text.encode("utf-8")).hexdigest() != manifest.get("sha256"):
             raise BackupError("SHA-256 does not match the manifest: the file was changed or truncated")
     try:
         ledger = Ledger.from_jsonl(text, **owner_kwargs)
-    except (ProtocolError, ValueError, KeyError) as exc:
-        raise BackupError(f"the chain does not verify: {exc}") from exc
+    except (ProtocolError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        # lestinxor raises ProtocolError for rule breaks; malformed rows can surface as the others
+        raise BackupError(f"the chain does not verify: {type(exc).__name__}: {exc}") from exc
     if not ledger.entries:
         raise BackupError("the backup is empty")
     if manifest is not None:
