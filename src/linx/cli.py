@@ -159,6 +159,26 @@ def _parser() -> argparse.ArgumentParser:
     osub.add_parser("status", help="pinned key, enforcement start, and whether this machine can sign")
     op = osub.add_parser("pin", help="print the owner_key setting to enforce signatures from now on")
     op.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    bk = sub.add_parser("backup", help="back up / verify / restore the ledger; anchors catch rollbacks")
+    bsub = bk.add_subparsers(dest="bcmd", required=True)
+    bkr = bsub.add_parser("run", help="check anchors, write a verified backup, anchor the new head")
+    bkr.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    bkr.add_argument(
+        "--out", help="backup folder (default: $LINX_BACKUP_DIR or %%LOCALAPPDATA%%\\LinX\\backups)"
+    )
+    bkr.add_argument("--keep", type=int, default=30, help="backups to keep (default 30)")
+    bkc = bsub.add_parser("check", help="replay the ledger against every anchor; exit 3 on rollback/rewrite")
+    bkc.add_argument("--ledger", help="UniSync JSONL file (default: Supabase)")
+    bkv = bsub.add_parser("verify", help="re-check a backup file: hash, manifest and the whole chain")
+    bkv.add_argument("file", type=Path)
+    bkl = bsub.add_parser("list", help="backups on this machine, oldest first")
+    bkl.add_argument("--out", help="backup folder")
+    bks = bsub.add_parser("restore", help="verify a backup, then restore it to a file or an empty Supabase")
+    bks.add_argument("file", type=Path)
+    dest = bks.add_mutually_exclusive_group(required=True)
+    dest.add_argument("--to", type=Path, help="write a local JSONL ledger here")
+    dest.add_argument("--supabase", action="store_true", help="insert into an EMPTY unisync_events table")
+    bks.add_argument("--force", action="store_true", help="with --to: replace an existing file")
     ak = sub.add_parser("ask", help="plain English -> one LinX command, run after you confirm")
     ak.add_argument("text", nargs="+", help='e.g. linx ask "what is waiting for me"')
     ak.add_argument("--ledger", help="UniSync JSONL file passed to the command (default: Supabase)")
@@ -233,6 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _ask(args)
     if args.cmd == "owner":
         return _owner(reg, args)
+    if args.cmd == "backup":
+        return _backup(args)
     if args.cmd == "explain":
         return _explain(reg, args)
     if args.cmd in ("brief", "repos", "backlog", "log", "find", "check", "task"):
@@ -534,6 +556,107 @@ def _nightly(reg: Registry, args: argparse.Namespace) -> int:
     except Exception as exc:  # ProtocolError (role/authority), unreadable ledger
         print(f"linx: {exc}", file=sys.stderr)
         return 2
+    return 0
+
+
+def _push_alarm(title: str, body: str) -> None:
+    """Urgent push if LINX_NTFY_URL is set. Never fails the caller."""
+    import os
+
+    from linx import notify
+
+    url = os.environ.get("LINX_NTFY_URL", "")
+    if not url:
+        return
+    try:
+        notify.send(
+            notify.Push(title, body, "urgent", "rotating_light"), url, os.environ.get("LINX_NTFY_TOKEN", "")
+        )
+    except Exception as exc:
+        print(f"linx: alarm push failed: {exc}", file=sys.stderr)
+
+
+def _backup(args: argparse.Namespace) -> int:
+    """Exit codes: 0 ok, 1 transient (retry later), 2 config or data error, 3 rollback/rewrite detected."""
+    import os
+
+    from linx import backup, memory
+
+    owner_kwargs = {k: v for k, v in _owner_kwargs(sign=False).items() if k != "signer"}
+    try:
+        if args.bcmd == "list":
+            for b in backup.listing(Path(args.out) if args.out else None):
+                m = b.manifest
+                head = str(m.get("head"))[:12]
+                print(f"{b.path}  {m.get('count')} entries, head #{m.get('head_seq')} {head}...")
+            return 0
+        if args.bcmd == "verify":
+            led = backup.verify(args.file, **owner_kwargs)
+            print(f"{args.file}: OK, {len(led.entries)} entries, head #{led.entries[-1].seq}")
+            return 0
+        if args.bcmd == "restore":
+            if args.supabase:
+                led = backup.restore_supabase(
+                    args.file,
+                    os.environ.get("UNISYNC_SUPABASE_URL", ""),
+                    os.environ.get("UNISYNC_SUPABASE_KEY", ""),
+                    **owner_kwargs,
+                )
+                print(f"restored {len(led.entries)} entries into Supabase; run `linx selftest` to confirm")
+            else:
+                led = backup.restore_file(args.file, args.to, force=args.force, **owner_kwargs)
+                print(f"restored {len(led.entries)} entries to {args.to}")
+            return 0
+    except backup.BackupError as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    except ImportError:
+        print("linx: install `linx[unisync]` to use backups", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 1 if memory.is_transient(exc) else 2
+
+    try:
+        led, source = _open_ledger(args.ledger)
+    except ImportError:
+        print("linx: install `linx[unisync]` to use backups", file=sys.stderr)
+        return 2
+    except Exception as exc:
+        print(f"linx: cannot open ledger: {exc}", file=sys.stderr)
+        return 1 if memory.is_transient(exc) else 2
+    if args.ledger:
+        source = str(Path(args.ledger).resolve())
+    entries = led.ledger.entries
+    try:
+        problems = backup.check(entries, backup.load_anchors(), source)
+    except backup.BackupError as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    if problems:
+        for line in problems:
+            print(f"linx: {line}", file=sys.stderr)
+        print(
+            "linx: restore from your newest good backup (`linx backup list`, `linx backup restore`)",
+            file=sys.stderr,
+        )
+        _push_alarm("LinX: UniSync ledger rollback detected", "\n".join(problems))
+        return 3
+    if args.bcmd == "check":
+        n = sum(a.source == source for a in backup.load_anchors())
+        print(f"{source}: {len(entries)} entries; all {n} anchor(s) hold")
+        return 0
+    try:
+        made = backup.write(led.ledger, source, out=Path(args.out) if args.out else None)
+        removed = backup.prune(args.keep, made.path.parent)
+        anchor = backup.record(entries, source)
+    except backup.BackupError as exc:
+        print(f"linx: {exc}", file=sys.stderr)
+        return 2
+    print(f"backup: {made.path} ({made.manifest['count']} entries)")
+    print(f"anchor: #{anchor.seq} {anchor.digest[:12]}... -> {backup.anchors_path()}")
+    if removed:
+        print(f"pruned {len(removed)} old backup(s)")
     return 0
 
 
