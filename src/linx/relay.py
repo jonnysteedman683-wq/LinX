@@ -56,7 +56,7 @@ def _check(event: Mapping[str, Any]) -> None:
     for key in ("task_id", "actor_id"):
         if not isinstance(event.get(key), str) or not event[key]:
             raise RelayError(f"event {eid}: missing {key}")
-    if event.get("event_type") not in STATUS_AFTER:
+    if not isinstance(event.get("event_type"), str) or event["event_type"] not in STATUS_AFTER:
         raise RelayError(f"event {eid}: unknown event_type {event.get('event_type')!r}")
     if not isinstance(event.get("details", {}), Mapping):
         raise RelayError(f"event {eid}: details must be an object")
@@ -79,6 +79,18 @@ def _state(event: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _escalated(ledger: Any) -> set[int]:
+    """Vortex event ids that already have an escalation on the ledger."""
+    entries = getattr(ledger, "entries", None)
+    if entries is None:
+        entries = getattr(getattr(ledger, "ledger", None), "entries", [])
+    return {
+        e.body.get("vortex_event")
+        for e in entries
+        if e.sender == SENDER and getattr(e.kind, "value", e.kind) == "escalate"
+    }
+
+
 def relay(ledger: LedgerLike, events: Iterable[Mapping[str, Any]]) -> int:
     """Post every event newer than the ledger's cursor, in event_id order. Returns how many were relayed."""
     batch = list(events)
@@ -94,16 +106,19 @@ def relay(ledger: LedgerLike, events: Iterable[Mapping[str, Any]]) -> int:
         if cursor(ledger) >= event["event_id"]:
             continue  # another relay posted it after our first read (a shared ledger re-syncs on post)
         state = _state(event)
-        ledger.post(SENDER, "memory.write", key=f"task/{event['task_id']}", value=state, scope=SCOPE)
-        if event["event_type"] == "blocked":
+        # Escalate first: the memory write advances the cursor, so a crash between the two posts must
+        # never leave a blocked task without its escalation. A retry skips an escalation already posted.
+        if event["event_type"] == "blocked" and event["event_id"] not in _escalated(ledger):
             reason = state["details"].get("blocked_reason") or "no reason given"
             ledger.post(
                 SENDER,
                 "escalate",
                 reason=f"Vortex task {event['task_id']} blocked: {reason}",
                 vortex_task=event["task_id"],
+                vortex_event=event["event_id"],
                 actor=event["actor_id"],
             )
+        ledger.post(SENDER, "memory.write", key=f"task/{event['task_id']}", value=state, scope=SCOPE)
         posted += 1
     return posted
 

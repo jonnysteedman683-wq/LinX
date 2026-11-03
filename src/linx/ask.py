@@ -389,8 +389,11 @@ def from_model(
         method="POST",
     )
     with (opener or urllib.request.urlopen)(req, timeout=timeout) as resp:
-        reply = json.loads(resp.read())
-    content = str(reply["choices"][0]["message"]["content"])
+        raw = resp.read()
+    try:
+        content = str(json.loads(raw)["choices"][0]["message"]["content"])
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise AskError(f"the model's reply is not a chat completion: {raw[:200]!r}") from exc
     m = re.search(r"\{.*\}", content, re.S)
     if not m:
         raise AskError(f"the model did not answer with JSON: {content[:200]!r}")
