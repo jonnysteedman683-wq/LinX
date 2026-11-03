@@ -6,6 +6,7 @@ Steps (each PASS / FAIL / SKIP, with a fix hint on FAIL):
 3. checkouts Which repo checkouts exist under --root (informational).
 4. vortex    The real Vortex answers `/events` with the operator token; its events relay into a
              throwaway in-memory ledger that verifies. Nothing is written anywhere.
+   backups   Newest ledger backup and anchor count (FAIL when the newest is over 3 days old).
 5. supabase  The shared ledger syncs and its whole hash chain verifies; the LinX agents are registered
              in `unisync_agents`. Read-only.
 Steps 4 and 5 are skipped when their settings are absent. Exit 0 when nothing failed.
@@ -158,6 +159,27 @@ def check_owner(registry: Registry) -> Step:
     return Step("owner", PASS, f"key {root[:12]}... enforced from #{start}; this machine can sign")
 
 
+def check_backups(now: float | None = None, max_age_days: float = 3.0) -> Step:
+    import time
+
+    from linx import backup
+
+    try:
+        found = backup.listing()
+        anchors = backup.load_anchors()
+    except (OSError, backup.BackupError) as exc:
+        return Step("backups", FAIL, str(exc), "fix or move aside the anchor log")
+    if not found:
+        return Step("backups", INFO, "no ledger backups yet (`linx backup run`; the nightly task runs it)")
+    newest = found[-1].manifest
+    age = ((time.time() if now is None else now) - float(newest.get("created", 0))) / 86400
+    detail = f"{len(found)} backup(s), newest {age:.1f} day(s) old at #{newest.get('head_seq')}; "
+    detail += f"{len(anchors)} anchor(s)"
+    if age > max_age_days:
+        return Step("backups", FAIL, detail, "is LinX-Nightly running? `linx backup run` now")
+    return Step("backups", PASS, detail)
+
+
 def check_vortex(url: str, token: str, fetch_factory: Callable[[str, str], Any] | None = None) -> Step:
     if not url or not token:
         return Step("vortex", SKIP, "set LINX_VORTEX_URL (or --vortex-url) and VORTEX_OPERATOR_TOKEN to test")
@@ -246,6 +268,7 @@ def run(
         check_relay(registry, root),
         check_checkouts(registry, root),
         check_owner(registry),
+        check_backups(),
         check_vortex(vortex_url, token),
         check_supabase(registry, supabase_url, supabase_key),
     ]

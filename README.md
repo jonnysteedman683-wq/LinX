@@ -200,6 +200,34 @@ and conflict/stale tags. It refuses a folder that looks like a live vault; HORIZ
 Stage 2 (X10): Sentinel reads the same ledger and shows it as its live graph (Mind Map tab,
 `GET /api/unisync/memory`, read-only).
 
+### Backups and rollback detection
+
+Owner signatures stop forged rows. They do not stop someone with database access from deleting the
+newest rows or putting back an older copy of the table, because the shorter chain still verifies.
+LinX keeps evidence off the database:
+
+```
+linx backup run                 # check anchors, write a verified backup, anchor the new head
+linx backup check               # replay the ledger against every anchor (exit 3 = rollback/rewrite)
+linx backup list                # backups on this machine
+linx backup verify FILE         # hash + manifest + whole chain (owner signatures included)
+linx backup restore FILE --to ledger.jsonl     # verified copy as a local ledger
+linx backup restore FILE --supabase            # into an EMPTY unisync_events table only
+```
+
+Backups go to `%LOCALAPPDATA%\LinX\backups` (or `LINX_BACKUP_DIR`), and the newest 30 are kept
+(`--keep`, or `LINX_BACKUP_KEEP` for the nightly task). Each backup has a manifest with its count,
+head and SHA-256. Every backup also appends the head's `{seq, digest}` to the anchor log
+(`%LOCALAPPDATA%\LinX\anchors.jsonl`, or `LINX_ANCHORS`).
+
+If an anchored seq is missing, rows were deleted. If its digest changed, history was replaced. Either
+way, `check` and `run` exit 3, nothing new is anchored or backed up, and with ntfy configured your
+phone gets an urgent alert.
+
+`LinX-Nightly` runs `linx backup run` after each nightly run, and `linx selftest` fails when the
+newest backup is more than 3 days old. Copy the backup folder somewhere off this PC now and then (a
+USB stick or cloud drive): an anchor only protects you while this machine is intact.
+
 ### Selftest
 
 ```

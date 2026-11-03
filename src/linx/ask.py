@@ -43,8 +43,14 @@ ALLOWED: dict[str, bool] = {
     "check": False,
     "task": True,
     "explain": False,
+    "backup": False,
 }
-OWNER_SUB = {("nightly", "retry"), ("memory", "put"), ("memory", "consolidate")}
+OWNER_SUB = {
+    ("nightly", "retry"),
+    ("memory", "put"),
+    ("memory", "consolidate"),
+    ("backup", "restore"),
+}
 # Commands that read or write the ledger take `--ledger` here (after the command, before any subcommand).
 LEDGER_CMDS = {
     "status",
@@ -171,6 +177,16 @@ def _assign(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list
     if agent in {"me", "you", "it", "linx"}:
         return None
     return ["task", m.group(2).strip().rstrip("."), "--for", agent]
+
+
+@rule(r"(?<!start )\bback ?ups?\b|\brollbacks?\b|\broll(?:ed)? ?back\b|\banchors?\b", "ledger backups")
+def _backup(m: re.Match[str], t: str, p: Sequence[tuple[str, str, str]]) -> list[str] | None:
+    low = t.lower()
+    if re.search(r"\b(list|show|which|how many)\b", low):
+        return ["backup", "list"]
+    if re.search(r"\b(check|verify|tamper|rolled|rollback|roll back|anchors?)\b", low):
+        return ["backup", "check"]
+    return ["backup", "run"]
 
 
 @rule(r"\b(good morning|morning|brief|briefing|catch me up|sum(mary| up))\b", "morning briefing")

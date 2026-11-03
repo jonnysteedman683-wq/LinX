@@ -45,6 +45,11 @@ def parse(argv: list[str]) -> Any:
         ("which repos are missing", ["doctor"]),
         ("list the systems", ["systems"]),
         ("reject T2 because it's too risky", ["reject", "T2", "--reason", "it's too risky"]),
+        ("back up the ledger", ["backup", "run"]),
+        ("has anyone rolled back the ledger?", ["backup", "check"]),
+        ("check the anchors", ["backup", "check"]),
+        ("show my backups", ["backup", "list"]),
+        ("start back up", ["resume"]),
     ],
 )
 def test_rules_map_english_to_commands(text: str, argv: list[str]) -> None:

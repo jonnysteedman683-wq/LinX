@@ -77,6 +77,16 @@ if ($Service -eq "relay") {
     & $python @svcArgs *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $LogFile -Append -Encoding utf8
     $code = $LASTEXITCODE
     Write-Log "[+] Nightly run finished with exit code $code."
+    # Back up the ledger and anchor its head; exit 3 means rows were deleted or rewritten (phone alarm sent).
+    $keep = Get-Setting "LINX_BACKUP_KEEP" "30"
+    $bkArgs = @("-m", "linx", "backup", "run", "--keep", $keep)
+    if ($ledger) { $bkArgs += @("--ledger", $ledger) }
+    & $python @bkArgs *>&1 | ForEach-Object { "$_" } | Out-File -FilePath $LogFile -Append -Encoding utf8
+    $bk = $LASTEXITCODE
+    if ($bk -eq 3) { Write-Log "[!] LEDGER ROLLBACK OR REWRITE DETECTED. See the log; restore with linx backup restore." }
+    elseif ($bk -ne 0) { Write-Log "[!] Ledger backup failed with exit code $bk." }
+    else { Write-Log "[+] Ledger backed up and anchored." }
+    if ($code -eq 0 -and $bk -ne 0) { $code = $bk }
     exit $code
 } else {
     $agent = Get-Setting "LINX_MEMORY_AGENT" "coordinator-bot"

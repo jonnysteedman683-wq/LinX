@@ -21,6 +21,7 @@ Take the first unchecked item not marked 🔒. One item, one PR.
 - [x] **X18** `linx explain`: repo expert. SQLite FTS5 (BM25, porter) incremental index over the 9 repos + LinX (docs and code); doc-weighted, deduped; cited passages, or a cited local-model answer; `linx ask` routes questions to it.
 - [x] **X21** Signed owner actions (hardening 1): `linx owner init/pin/status`; pinned `owner_key` in `systems.json` or `UNISYNC_OWNER_KEY`/`_FROM`; every ledger LinX opens enforces it and signs owner posts when the seed is present; `selftest` owner check. Needs Lestinxor L6 (#13).
 - [x] **X22** CI (hardening 5, owner-approved): lint, mypy strict, tests with a 90% coverage floor on Python 3.10–3.13 plus Windows; every `.ps1` must parse; a daily run catches breakage from lestinxor `main`.
+- [x] **X23** Backups, restore and anchoring (hardening 6): `linx backup run/check/list/verify/restore`; verified JSONL + manifest; head anchors off the database catch deletion or rewrite (exit 3 + urgent push); restore to file or an empty Supabase table; nightly task backs up; selftest `backups` check.
 - [ ] **X19** `linx listen`: push-to-talk voice in (local speech-to-text, optional `linx[voice]` extra), optional spoken reply; Windows first.
 - [ ] **X6** Neurocore intents → UniSync `task.request` via Hermes, always `requires_approval: true`.
 - [x] **X8** Host the live relay: owner chose the same machine as Vortex. `Register-LinxRelayTask.ps1`, `START_LINX_RELAY.bat`, `scripts/windows/Start-LinxService.ps1`, `relay-live --log-file`, `python -m linx`.
