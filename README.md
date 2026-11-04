@@ -165,6 +165,10 @@ status` and `selftest` show the state.
   `linx status` and the digest. Pausing Vortex agents stays a Vortex operator action.
 - `linx pending`, `linx approve TASK [--note]`, `linx reject TASK --reason` post the owner's decision; the
   ledger refuses decisions from anyone else and for tasks that are not waiting.
+- Approvals from your phone: double-click `APPROVE_LINX.bat` (or tap it over Chrome Remote Desktop). It lists
+  what is waiting as numbers; pick one, then A (approve) or R (reject). It runs `linx approve`/`reject` on this
+  machine, so your owner key signs as usual. Phone setup: install Chrome Remote Desktop on this PC
+  (remotedesktop.google.com/access) and the Chrome Remote Desktop app on the phone, same Google account.
 - Phone digest: set `LINX_NTFY_URL` (e.g. `https://ntfy.sh/<long-random-topic>`; install the ntfy app and
   subscribe to the same topic) and optionally `LINX_NTFY_TOKEN`. `linx nightly run` then pushes the
   digest every morning: urgent if halted, high if something failed or waits for approval. `linx notify`

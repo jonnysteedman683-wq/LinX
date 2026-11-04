@@ -15,6 +15,7 @@ Take the first unchecked item not marked 🔒. One item, one PR.
 - [x] **X13** Phone digest: `linx notify` + automatic push after `nightly run` via ntfy (`LINX_NTFY_URL`/`_TOKEN`); owner approvals `linx pending/approve/reject`.
 - [x] **X14** Kill switch: `linx halt/resume` (owner-only control scope); nightly refuses, memory loop pauses, status/digest banner.
 - [x] **X15** Nightly retry cap: park after 3 failures + one escalation, `linx nightly retry`; failure feedback to the next attempt.
+- [x] **X25** `APPROVE_LINX.bat`: numbered approvals menu (pick, then A/R) for deciding from a phone over remote desktop; runs `linx approve/reject` locally so the owner key signs.
 - [ ] **X16** Sebastian reads `LINX_FEEDBACK` in `evolve` (PR to Sebastian; `evolve.py` is guarded, so 🔒 owner-approved).
 - [x] **X17** `linx ask`: English -> one allowlisted LinX command (rules, then optional local model via OpenAI-compatible API), parser-validated, always confirmed; owner actions need `yes`.
 - [x] **X20** Bigger commands: `brief`, `repos [--fetch|--pull]` (ff-only, clean, default branch), `backlog`, `log`, `find`, `check`, `task --for`; all understood by `linx ask`.
